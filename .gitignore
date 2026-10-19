@@ -1,0 +1,21 @@
+.build/
+build/
+DerivedData/
+.DS_Store
+.env*
+!.env.example
+*.log
+.superpowers/
+
+# Local personal data and signing material
+*.p12
+*.pfx
+*.pem
+*.key
+credentials*.json
+memories*.json
+test-records*
+recordings/
+private/
+__pycache__/
+*.pyc
