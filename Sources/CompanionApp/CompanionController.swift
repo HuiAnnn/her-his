@@ -122,6 +122,11 @@ final class CompanionController: ObservableObject {
             case .speaking: self.phase = .speaking
             }
         }
+        self.realtime.onTextNotSent = { [weak self] text in
+            guard let self else { return }
+            if self.draft.isEmpty { self.draft = text }
+            self.errorText = "记忆同步尚未确认，这条文字没有发送。声音可继续；重新开启对话后可再发送。"
+        }
         self.realtime.onUserTranscript = { [weak self] text in self?.receiveRealtimeTranscript(text) }
         self.realtime.onAssistantTranscript = { [weak self] text in
             guard let self else { return }
@@ -583,6 +588,7 @@ final class CompanionController: ObservableObject {
                     let changed = try store.apply(candidates: candidates, source: source, expectedRevision: revision, enabled: true)
                     self.recordTest("memory", "原话：\(source)\n结果：\(changed ? "已保存" : "无新增记忆")；候选主题：\(candidates.map(\.key).joined(separator: ", "))")
                     self.memories = store.memories; self.clearMemoryFailure()
+                    if changed { self.realtime.updateMemories(self.memories) }
                 } catch {
                     guard !Task.isCancelled, self.voiceEpoch == token, self.memoryJobEpoch == job, self.realtime.isActive else { return }
                     let reason: String
@@ -618,6 +624,7 @@ final class CompanionController: ObservableObject {
             let changed = try store.apply(candidates: update.memories, source: source, expectedRevision: store.revision, enabled: memoryEnabled)
             recordTest("memory", changed ? "已保存实时对话记忆" : "实时对话无新增记忆")
             memories = store.memories
+            if changed { realtime.updateMemories(memories) }
             return changed ? "记忆已保存到本机。" : "没有新增记忆：内容已存在，或没有通过原话证据与拒存检查。不要宣称保存成功。"
         } catch { memories = store.memories; return "记忆操作未完成，请用户到记忆页查看；不要宣称成功。" }
     }

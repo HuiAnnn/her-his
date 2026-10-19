@@ -146,6 +146,9 @@ struct CompanionRootView: View {
             }
             controls.padding(.top, 20).padding(.bottom, 24)
             composer.padding(.horizontal, 34).padding(.bottom, 14)
+            if !model.realtime.memoryContextStatus.isEmpty {
+                Text(model.realtime.memoryContextStatus).font(.caption).foregroundStyle(Palette.muted)
+            }
             Text(model.testRecordingEnabled ? "本机测试记录开启 · 正在保存对话文字" : "本机不保存完整聊天 · 记忆由你随时管理")
                 .font(.system(size: 9)).foregroundStyle(Palette.muted.opacity(0.7)).padding(.bottom, 22)
         }

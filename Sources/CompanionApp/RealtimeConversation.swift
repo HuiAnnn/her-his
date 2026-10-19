@@ -8,8 +8,16 @@ import CompanionCore
     var onFailure: ((String) -> Void)? { get set }
     func start(key: String, configuration: RealtimeConfiguration)
     func send(_ event: [String: Any])
+    func updateMemoryContext(_ configuration: RealtimeConfiguration, revision: Int)
     func interrupt()
     func stop()
+}
+
+extension RealtimeDriving {
+    func updateMemoryContext(_ configuration: RealtimeConfiguration, revision: Int) {
+        send(["type": "session.update", "event_id": "memory_context_\(revision)",
+              "session": ["type": "realtime", "instructions": configuration.session["instructions"] as? String ?? ""]])
+    }
 }
 
 enum RealtimeState { case idle, connecting, listening, thinking, speaking }
@@ -30,6 +38,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     @Published private(set) var message = "保存对应服务的凭证后，可开启直接语音对话。"
     @Published private(set) var state: RealtimeState = .idle { didSet { onState?(state) } }
     var onState: ((RealtimeState) -> Void)?
+    var onTextNotSent: ((String) -> Void)?
     var onUserTranscript: ((String) -> Void)?
     var onAssistantTranscript: ((String) -> Void)?
     var onAssistantTestRecord: ((String, String?) -> Void)?
@@ -54,11 +63,15 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     private var played: Set<String> = []
     private var pendingTools: [(id: String, name: String, arguments: String, sourceID: String?)] = []
     private var toolDeadline: Task<Void, Never>?
+    @Published private(set) var memoryContextStatus = ""
+    let memorySync: LiveMemorySync
+    private var deferredText: (id: String, text: String)?
     private var memoryAllowed = false
     private var manuallyInterrupted = false
     var isActive: Bool { state != .idle }
 
-    init(defaults: UserDefaults = .standard, credentials: (any VoiceCredentialStoring)? = nil, doubaoCredentials: (any VoiceCredentialStoring)? = nil, driver: any RealtimeDriving, doubaoDriver: (any RealtimeDriving)? = nil) {
+    init(defaults: UserDefaults = .standard, credentials: (any VoiceCredentialStoring)? = nil, doubaoCredentials: (any VoiceCredentialStoring)? = nil, driver: any RealtimeDriving, doubaoDriver: (any RealtimeDriving)? = nil, memorySync: LiveMemorySync? = nil) {
+        self.memorySync = memorySync ?? LiveMemorySync()
         self.defaults = defaults; self.openAICredentials = SessionCredentials(credentials ?? VoiceKeychain(service: "com.huian.herhis.openai"))
         self.doubaoCredentials = SessionCredentials(doubaoCredentials ?? VoiceKeychain(service: "com.huian.herhis.doubao"))
         self.openAIDriver = driver; self.doubaoDriver = doubaoDriver ?? DoubaoRealtime()
@@ -94,11 +107,29 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
         let key = try requireKey()
         let token = epoch
         self.initialText = initialText; memoryAllowed = configuration.memoryEnabled
+        memorySync.onSend = { [weak self] config, revision in
+            guard let self, self.epoch == token, self.isActive else { return }
+            self.driver.updateMemoryContext(config, revision: revision)
+        }
+        memorySync.onStatus = { [weak self] status in self?.memoryContextStatus = status }
+        memorySync.onSettled = { [weak self] in
+            guard let self, self.epoch == token, self.isActive else { return }
+            self.flushDeferredText()
+        }
+        memorySync.onRejected = { [weak self] in
+            guard let self, self.epoch == token, self.isActive else { return }
+            if let pending = self.deferredText {
+                self.deferredText = nil; self.state = .listening
+                self.onTextNotSent?(pending.text)
+            }
+        }
+        memorySync.start(configuration)
         state = .connecting
         driver.onReady = { [weak self] in
             guard let self, self.epoch == token, self.state == .connecting else { return }
             self.message = "实时语音已连接。"
             self.state = .listening
+            self.memorySync.activate()
             let text = self.initialText; self.initialText = ""
             if !text.isEmpty { self.sendText(text) }
         }
@@ -114,6 +145,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     }
     func stop() {
         epoch += 1
+        deferredText = nil; memorySync.stop()
         for value in [openAIDriver, doubaoDriver] {
             value.onReady = nil; value.onEvent = nil; value.onFailure = nil; value.stop()
         }
@@ -124,7 +156,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     }
     func interrupt() {
         guard isActive, state != .connecting else { return }
-        manuallyInterrupted = true
+        manuallyInterrupted = true; deferredText = nil
         suppressCurrent()
         driver.interrupt(); state = .listening
     }
@@ -137,19 +169,40 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     }
     func sendText(_ text: String) {
         guard isActive, state != .connecting, !text.isEmpty else { return }
+        guard !memorySync.hasFailed else { onTextNotSent?(text); return }
         interrupt()
         manuallyInterrupted = false; currentResponse = nil
         let id = "item_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         latestItem = id; sourceText = String(text.prefix(4000))
-        driver.send(["type": "conversation.item.create", "item": ["id": id, "type": "message", "role": "user", "content": [["type": "input_text", "text": sourceText!]]]])
+        memorySync.retrieve(sourceText!)
         onUserTranscript?(sourceText!)
         guard isActive else { return }
-        driver.send(["type": "response.create"]); state = .thinking
+        guard !memorySync.hasFailed else { onTextNotSent?(text); state = .listening; return }
+        deferredText = (id, sourceText!); state = .thinking
+        flushDeferredText()
+    }
+    func updateMemories(_ memories: [CompanionMemory]) {
+        guard isActive, memoryAllowed else { return }; memorySync.update(memories)
+    }
+    private func flushDeferredText() {
+        guard isActive, !memorySync.isWaiting, !memorySync.hasFailed, let pending = deferredText else { return }
+        deferredText = nil
+        driver.send(["type": "conversation.item.create", "item": ["id": pending.id, "type": "message", "role": "user", "content": [["type": "input_text", "text": pending.text]]]])
+        driver.send(["type": "response.create"])
     }
     private func receive(_ event: [String: Any]) {
         guard let type = event["type"] as? String else { return }
         switch type {
+        case "memory_context.query":
+            if let text = event["text"] as? String { memorySync.retrieve(text) }
+        case "memory_context.updated":
+            if let revision = event["revision"] as? Int { memorySync.acknowledge(revision) }
+        case "memory_context.failed":
+            if let revision = event["revision"] as? Int { memorySync.reject(revision) }
+        case "session.updated":
+            if let instructions = (event["session"] as? [String: Any])?["instructions"] as? String { memorySync.acknowledgeInstructions(instructions) }
         case "input_audio_buffer.speech_started":
+            deferredText = nil
             suppressCurrent(); manuallyInterrupted = false; currentResponse = nil
             latestItem = nil; sourceText = nil; state = .listening
         case "input_audio_buffer.speech_stopped": state = .thinking
@@ -157,7 +210,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
             latestItem = event["item_id"] as? String; sourceText = nil
         case "conversation.item.input_audio_transcription.completed":
             guard let id = event["item_id"] as? String, id == latestItem, let text = event["transcript"] as? String, !text.isEmpty else { return }
-            sourceText = String(text.prefix(4000)); onUserTranscript?(sourceText!)
+            sourceText = String(text.prefix(4000)); memorySync.retrieve(sourceText!); onUserTranscript?(sourceText!)
             guard isActive else { return }
             finishToolsIfPossible()
         case "conversation.item.input_audio_transcription.failed":
@@ -203,6 +256,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
                 }
             }
         case "error":
+            if let id = (event["error"] as? [String: Any])?["event_id"] as? String, memorySync.rejectEvent(id) { return }
             let code = (event["error"] as? [String: Any])?["code"] as? String ?? ""
             if ["response_cancel_not_active", "output_audio_buffer_empty"].contains(code) { return }
             fail((code.contains("quota") || code.contains("rate_limit") ? RealtimeError.quota : RealtimeError.unavailable).localizedDescription)

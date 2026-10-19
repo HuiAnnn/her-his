@@ -19,19 +19,51 @@ public enum CompanionStyle {
 
 public enum MemoryContext {
     /// Reserve space for durable facts and interaction boundaries, then recent context.
-    public static func select(_ memories: [CompanionMemory], limit: Int = 20) -> [CompanionMemory] {
+    public static func select(_ memories: [CompanionMemory], limit: Int = 20, query: String = "", recentKeys: [String] = []) -> [CompanionMemory] {
         func priority(_ memory: CompanionMemory) -> Int {
             if ["birthday", "preferred_name", "name"].contains(memory.key.lowercased()) { return 2 }
             return memory.kind == .boundary ? 1 : 0
         }
+        let relevance = Dictionary(uniqueKeysWithValues: memories.map { ($0.id, matchScore(query: query, memory: $0)) })
         return Array(memories.sorted {
+            let left = relevance[$0.id] ?? 0, right = relevance[$1.id] ?? 0
+            if left != right { return left > right }
+            let leftRecent = recentKeys.firstIndex(of: $0.key) ?? Int.max
+            let rightRecent = recentKeys.firstIndex(of: $1.key) ?? Int.max
+            if leftRecent != rightRecent { return leftRecent < rightRecent }
             if priority($0) != priority($1) { return priority($0) > priority($1) }
             if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
             return $0.id.uuidString < $1.id.uuidString
         }.prefix(max(0, limit)))
     }
+    private static let topics: [[String]] = [
+        ["birthday", "生日", "出生", "生辰"], ["preferred_name", "名字", "称呼", "叫我"],
+        ["walking", "散步", "走走", "walk"], ["sleep", "睡觉", "入睡", "睡眠", "睡前"],
+        ["drink", "饮料", "饮品", "喝茶", "咖啡", "绿茶", "红茶"],
+        ["boundary", "建议", "追问", "倾听", "听我说"]
+    ]
+    private static func terms(_ text: String) -> Set<String> {
+        var clean = text.lowercased()
+        for word in ["你还记得", "还记得", "我喜欢", "用户", "喜欢", "什么时候", "什么", "怎么", "我的", "你的", "最近", "现在", "已经", "正在", "一直", "平时"] {
+            clean = clean.replacingOccurrences(of: word, with: " ")
+        }
+        let chunks = clean.components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        var result = Set<String>()
+        for chunk in chunks {
+            if chunk.allSatisfy({ $0.isASCII }) { if chunk.count > 2 { result.insert(chunk) }; continue }
+            let chars = Array(chunk)
+            if chars.count > 1 { for index in 0..<(chars.count - 1) { result.insert(String(chars[index...index + 1])) } }
+        }
+        return result
+    }
+    private static func matchScore(query: String, memory: CompanionMemory) -> Int {
+        guard !query.isEmpty else { return 0 }
+        let question = query.lowercased(), body = (memory.key + " " + memory.content).lowercased()
+        let topicScore = topics.filter { group in group.contains(where: question.contains) && group.contains(where: body.contains) }.count * 6
+        return topicScore + min(5, terms(question).intersection(terms(body)).count)
+    }
     public static func json(_ memories: [CompanionMemory], enabled: Bool = true) -> String {
-        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]
         return (try? encoder.encode(enabled ? select(memories) : [])).map { String(decoding: $0, as: UTF8.self) } ?? "[]"
     }
 }

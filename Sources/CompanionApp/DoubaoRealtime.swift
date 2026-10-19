@@ -14,7 +14,7 @@ import CompanionCore
     private var starting: Task<Void, Never>?, receiving: Task<Void, Never>?, writing: Task<Void, Never>?, deadline: Task<Void, Never>?
     private var session: URLSession?, socket: URLSessionWebSocketTask?
     private var request: URLRequest?, configuration: [String: Any]?
-    private var queue: [(Data, Bool)] = []
+    private var queue: [(Data, Bool, Int)] = []
     private var sessionID = "", ready = false, authorized = false
     private var inputGeneration = 0, textGeneration = 0
     private var awaitingTextAck = false
@@ -24,6 +24,20 @@ import CompanionCore
     private var ttsCaption = "", chatCaption: String?
     private var chatFinished = false, playbackDone = false, captionPublished = false
     private let origin = URL(string: "https://presence.invalid/")!
+
+    private let packetSink: ((Data) async throws -> Void)?
+    private var dialogID = ""
+    private var contextRevision: Int?
+    private var contextDispatched = false
+    init(packetSink: ((Data) async throws -> Void)? = nil) { self.packetSink = packetSink; super.init() }
+    func updateMemoryContext(_ configuration: RealtimeConfiguration, revision: Int) {
+        guard ready, contextRevision == nil else { event("memory_context.failed", ["revision": revision]); return }
+        do {
+            let body = try DoubaoPacket.memoryUpdate(configuration, dialogID: dialogID)
+            contextRevision = revision; contextDispatched = false
+            enqueue(event: 201, body: body)
+        } catch { event("memory_context.failed", ["revision": revision]) }
+    }
 
     func start(key: String, configuration: RealtimeConfiguration) {
         stop(); let token = epoch
@@ -90,21 +104,25 @@ import CompanionCore
         }
     }
     private func enqueue(event: Int, body: [String: Any] = [:], audio: Data? = nil) {
-        guard socket != nil else { return }
+        guard socket != nil || packetSink != nil else { return }
         do {
             let data = try DoubaoPacket.encode(event: event, sessionID: event >= 100 ? sessionID : nil,
                                               payload: audio ?? JSONSerialization.data(withJSONObject: body), audio: audio != nil)
             guard queue.count < 100 else { fail("网络发送跟不上收音，已关闭麦克风。请检查网络后重试。"); return }
-            queue.append((data, audio != nil)); pump()
+            queue.append((data, audio != nil, event)); pump()
         } catch { fail(DoubaoError.protocolError.localizedDescription) }
     }
     private func pump() {
-        guard writing == nil, let socket else { return }; let token = epoch
+        guard writing == nil, socket != nil || packetSink != nil else { return }; let token = epoch
+        let socket = socket, packetSink = packetSink
         writing = Task { [weak self] in
             guard let self else { return }
             do {
                 while !self.queue.isEmpty {
-                    let item = self.queue.removeFirst(); try await socket.send(.data(item.0))
+                    let item = self.queue.removeFirst()
+                    if item.2 == 201 { self.contextDispatched = true }
+                    if let packetSink { try await packetSink(item.0) }
+                    else if let socket { try await socket.send(.data(item.0)) }
                     guard !Task.isCancelled, self.epoch == token else { return }
                     if item.1 { self.invoke("window.doubao.ack();") }
                 }
@@ -132,7 +150,10 @@ import CompanionCore
         case 50: if let configuration { self.configuration = nil; enqueue(event: 100, body: configuration) }
         case 150:
             guard !ready else { return }; ready = true; deadline?.cancel(); deadline = nil
+            dialogID = body["dialog_id"] as? String ?? ""
             invoke("window.doubao.activate();"); onReady?()
+        case 251:
+            if contextDispatched, let revision = contextRevision { contextDispatched = false; contextRevision = nil; event("memory_context.updated", ["revision": revision]) }
         case 51, 52, 152, 153, 599: throw DoubaoError.connection
         case 450:
             inputGeneration += 1; queuedText = nil
@@ -140,6 +161,9 @@ import CompanionCore
             question = body["question_id"] as? String ?? UUID().uuidString
             event("input_audio_buffer.speech_started"); event("input_audio_buffer.committed", ["item_id": question])
         case 451:
+            if ready, let results = body["results"] as? [[String: Any]], let text = results.last?["text"] as? String, !text.isEmpty {
+                event("memory_context.query", ["text": String(text.prefix(4000))])
+            }
             if let results = body["results"] as? [[String: Any]], let result = results.last,
                result["is_interim"] as? Bool == false, let text = result["text"] as? String { transcript = String(text.prefix(4000)) }
         case 459:
@@ -258,6 +282,7 @@ import CompanionCore
         starting?.cancel(); receiving?.cancel(); writing?.cancel(); deadline?.cancel()
         starting = nil; receiving = nil; writing = nil; deadline = nil
         socket?.cancel(with: .normalClosure, reason: nil); session?.invalidateAndCancel(); socket = nil; session = nil
+        dialogID = ""; contextRevision = nil; contextDispatched = false
         request = nil; configuration = nil; queue.removeAll(); resetCaption(); rejected.removeAll()
         question = ""; reply = ""; audioReply = ""; transcript = ""; suppressed = false
         inputGeneration = 0; textGeneration = 0; awaitingTextAck = false; queuedText = nil

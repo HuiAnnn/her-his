@@ -19,6 +19,11 @@ import CompanionCore
         XCTAssertEqual(controller.memories.first?.content, "生日是1995年6月18日")
         let restored = try MemoryStore(fileURL: dir.appendingPathComponent("memory.json"), ownerID: NSUserName())
         XCTAssertEqual(restored.memories.first?.key, "birthday")
+        let updates = driver.sent.filter { $0["type"] as? String == "session.update" }
+        XCTAssertEqual(updates.count, 1, "Persisted memory must update this connection")
+        XCTAssertTrue(String(describing: updates).contains("1995年6月18日"))
+        XCTAssertEqual(driver.starts, 1)
+        XCTAssertEqual(driver.interruptions, 0, "Background memory must not interrupt speech")
         let recorded = try Data(contentsOf: controller.testJournalURL)
         let entries = try JSONDecoder().decode([TestJournal.Entry].self, from: recorded)
         XCTAssertTrue(entries.contains { $0.kind == "user" && $0.text.contains("1995年6月18日") })

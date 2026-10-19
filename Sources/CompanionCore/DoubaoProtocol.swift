@@ -81,6 +81,18 @@ public struct DoubaoPacket {
         guard index == bytes.count else { throw DoubaoError.protocolError }
         return .init(event: event, sessionID: id, payload: payload)
     }
+    public static func memoryUpdate(_ config: RealtimeConfiguration, dialogID: String) throws -> [String: Any] {
+        guard !dialogID.isEmpty else { throw DoubaoError.protocolError }
+        let full = try session(config)
+        var dialog = full["dialog"] as! [String: Any]
+        dialog.removeValue(forKey: "extra")
+        dialog["dialog_id"] = dialogID
+        var tts = full["tts"] as! [String: Any]
+        var audio = tts["audio_config"] as! [String: Any]
+        audio["speech_rate"] = 0; audio["loudness_rate"] = 0
+        tts["audio_config"] = audio
+        return ["dialog": dialog, "tts": tts]
+    }
     public static func session(_ config: RealtimeConfiguration) throws -> [String: Any] {
         let voices = ["zh_female_vv_jupiter_bigtts", "zh_female_xiaohe_jupiter_bigtts", "zh_male_yunzhou_jupiter_bigtts", "zh_male_xiaotian_jupiter_bigtts"]
         guard config.model == "1.2.1.1", voices.contains(config.voice) else { throw RealtimeError.invalidConfiguration }
