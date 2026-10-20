@@ -216,7 +216,7 @@ import CompanionCore
         case 352:
             guard ready, !suppressed, !reply.isEmpty, audioReply == reply, !rejected.contains(reply) else { return }
             guard !packet.payload.isEmpty, packet.payload.count % 2 == 0 else { throw DoubaoError.protocolError }
-            event("output_audio_buffer.started")
+            event("output_audio_buffer.started", ["response_id": reply])
             invoke("window.doubao.play(data,id);", ["data": packet.payload.base64EncodedString(), "id": reply])
         case 359:
             guard !suppressed, body["reply_id"] as? String == reply, !reply.isEmpty else { return }

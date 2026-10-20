@@ -63,15 +63,21 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     private var played: Set<String> = []
     private var pendingTools: [(id: String, name: String, arguments: String, sourceID: String?)] = []
     private var toolDeadline: Task<Void, Never>?
+    private var responseWarning: Task<Void, Never>?, responseDeadline: Task<Void, Never>?
+    private let responseWarningDelay: UInt64, responseTimeout: UInt64
+    private var responseWaitEpoch = 0
+    private var responseHasAudio = false
     @Published private(set) var memoryContextStatus = ""
+    @Published private(set) var responseWaitMessage = ""
     let memorySync: LiveMemorySync
     private var deferredText: (id: String, text: String)?
     private var memoryAllowed = false
     private var manuallyInterrupted = false
     var isActive: Bool { state != .idle }
 
-    init(defaults: UserDefaults = .standard, credentials: (any VoiceCredentialStoring)? = nil, doubaoCredentials: (any VoiceCredentialStoring)? = nil, driver: any RealtimeDriving, doubaoDriver: (any RealtimeDriving)? = nil, memorySync: LiveMemorySync? = nil) {
+    init(defaults: UserDefaults = .standard, credentials: (any VoiceCredentialStoring)? = nil, doubaoCredentials: (any VoiceCredentialStoring)? = nil, driver: any RealtimeDriving, doubaoDriver: (any RealtimeDriving)? = nil, memorySync: LiveMemorySync? = nil, responseWarningDelay: UInt64 = 5_000_000_000, responseTimeout: UInt64 = 15_000_000_000) {
         self.memorySync = memorySync ?? LiveMemorySync()
+        self.responseWarningDelay = responseWarningDelay; self.responseTimeout = responseTimeout
         self.defaults = defaults; self.openAICredentials = SessionCredentials(credentials ?? VoiceKeychain(service: "com.huian.herhis.openai"))
         self.doubaoCredentials = SessionCredentials(doubaoCredentials ?? VoiceKeychain(service: "com.huian.herhis.doubao"))
         self.openAIDriver = driver; self.doubaoDriver = doubaoDriver ?? DoubaoRealtime()
@@ -145,6 +151,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     }
     func stop() {
         epoch += 1
+        cancelResponseWait(); responseHasAudio = false
         deferredText = nil; memorySync.stop()
         for value in [openAIDriver, doubaoDriver] {
             value.onReady = nil; value.onEvent = nil; value.onFailure = nil; value.stop()
@@ -161,6 +168,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
         driver.interrupt(); state = .listening
     }
     private func suppressCurrent() {
+        cancelResponseWait(); responseHasAudio = false
         if let currentResponse { suppressed.insert(currentResponse); captions[currentResponse] = nil }
         toolDeadline?.cancel(); toolDeadline = nil
         // A new user turn must not let an earlier delayed transcript write a memory.
@@ -187,8 +195,29 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     private func flushDeferredText() {
         guard isActive, !memorySync.isWaiting, !memorySync.hasFailed, let pending = deferredText else { return }
         deferredText = nil
+        beginResponseWait()
         driver.send(["type": "conversation.item.create", "item": ["id": pending.id, "type": "message", "role": "user", "content": [["type": "input_text", "text": pending.text]]]])
         driver.send(["type": "response.create"])
+    }
+    private func beginResponseWait() {
+        guard isActive, state != .connecting, responseDeadline == nil, !responseHasAudio else { return }
+        let token = responseWaitEpoch, warningDelay = responseWarningDelay, timeout = responseTimeout
+        responseWarning = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: warningDelay) } catch { return }
+            guard let self, self.responseWaitEpoch == token, self.isActive else { return }
+            self.responseWaitMessage = "还在等待回应，你也可以继续说。"
+        }
+        // A separate deadline cannot be extended by progress or tool-call events.
+        responseDeadline = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: timeout) } catch { return }
+            guard let self, self.responseWaitEpoch == token, self.isActive else { return }
+            self.fail("这次等待回应超时，通话已结束并停止收音。点“打电话”可以重新接通。")
+        }
+    }
+    private func cancelResponseWait() {
+        responseWaitEpoch += 1
+        responseWarning?.cancel(); responseDeadline?.cancel()
+        responseWarning = nil; responseDeadline = nil; responseWaitMessage = ""
     }
     private func receive(_ event: [String: Any]) {
         guard let type = event["type"] as? String else { return }
@@ -205,7 +234,9 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
             deferredText = nil
             suppressCurrent(); manuallyInterrupted = false; currentResponse = nil
             latestItem = nil; sourceText = nil; state = .listening
-        case "input_audio_buffer.speech_stopped": state = .thinking
+        case "input_audio_buffer.speech_stopped":
+            guard !manuallyInterrupted, !responseHasAudio else { return }
+            state = .thinking; beginResponseWait()
         case "input_audio_buffer.committed":
             latestItem = event["item_id"] as? String; sourceText = nil
         case "conversation.item.input_audio_transcription.completed":
@@ -224,7 +255,9 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
             if let latestItem { responseSources[id] = latestItem }
             state = .thinking
         case "output_audio_buffer.started":
-            guard !manuallyInterrupted else { return }; state = .speaking
+            guard !manuallyInterrupted, let id = event["response_id"] as? String,
+                  id == currentResponse, !suppressed.contains(id) else { return }
+            responseHasAudio = true; cancelResponseWait(); state = .speaking
         case "response.output_audio_transcript.done":
             guard let id = event["response_id"] as? String, !suppressed.contains(id), let text = event["transcript"] as? String,
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -239,8 +272,16 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
             finishedResponses.insert(id)
             guard !manuallyInterrupted, !suppressed.contains(id) else { return }
             if response["status"] as? String == "failed" { fail(RealtimeError.unavailable.localizedDescription); return }
-            if response["status"] as? String == "cancelled" { suppressed.insert(id); captions[id] = nil; return }
-            let calls = (response["output"] as? [[String: Any]] ?? []).filter { $0["type"] as? String == "function_call" }
+            if response["status"] as? String == "cancelled" {
+                suppressed.insert(id); captions[id] = nil
+                if id == currentResponse { cancelResponseWait(); state = .listening }
+                return
+            }
+            let output = response["output"] as? [[String: Any]] ?? []
+            if provider == .openAI, id == currentResponse, output.isEmpty, response["status"] as? String == "completed" {
+                cancelResponseWait(); state = .listening
+            }
+            let calls = output.filter { $0["type"] as? String == "function_call" }
             for call in calls.prefix(8) {
                 guard let callID = call["call_id"] as? String else { continue }
                 pendingTools.append((callID, call["name"] as? String ?? "", call["arguments"] as? String ?? "", responseSources[id]))

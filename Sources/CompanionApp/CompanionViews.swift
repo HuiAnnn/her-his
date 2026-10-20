@@ -133,7 +133,7 @@ struct CompanionRootView: View {
                 .frame(height: model.lines.isEmpty ? 196 : 130)
             Text(model.phase.title).font(.system(size: model.lines.isEmpty ? 30 : 23, weight: .regular, design: .serif))
                 .padding(.top, 8)
-            Text(model.phase == .connecting ? "稍等一下，正在接通。" : (model.callInProgress ? "我在这里，想说什么都可以。" : "想说话的时候，给我打个电话。"))
+            Text(!model.realtime.responseWaitMessage.isEmpty ? model.realtime.responseWaitMessage : (model.phase == .connecting ? "稍等一下，正在接通。" : (model.callInProgress ? "我在这里，想说什么都可以。" : "想说话的时候，给我打个电话。")))
                 .font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.top, 12)
             if model.lines.isEmpty {
                 Spacer(minLength: 28)
