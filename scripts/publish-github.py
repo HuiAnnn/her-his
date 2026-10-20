@@ -38,7 +38,7 @@ def strip_image_metadata(path):
 
 def scan(directory, scanner):
     # Source-only publication: data files, signing material and machine paths are forbidden.
-    forbidden = re.compile(r'(?:^|/)(?:\.env(?:\..*)?|memories\.json|test-records.*|credentials.*|.*\.(?:p12|pfx|key|pem|log|jsonl|zip|dmg))$', re.I)
+    forbidden = re.compile(r'(?:^|/)(?:\.env(?:\..*)?|memories\.json|call-history.*|test-records.*|credentials.*|.*\.(?:p12|pfx|key|pem|log|jsonl|zip|dmg))$', re.I)
     private_text = re.compile(r'/Users/[A-Za-z0-9_.-]+/|[A-Z0-9._%+-]+@(?!users\.noreply\.github\.com)[A-Z0-9.-]+\.[A-Z]{2,}', re.I)
     for path in directory.rglob('*'):
         if '.git' in path.relative_to(directory).parts or not path.is_file():

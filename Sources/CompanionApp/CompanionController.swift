@@ -47,6 +47,8 @@ final class CompanionController: ObservableObject {
     @Published private(set) var speechAvailable = false
     @Published var showWelcome: Bool
     let dataURL: URL
+    let callHistory: CallHistoryModel
+    private var historyChanges: AnyCancellable?
     var testJournalURL: URL { dataURL.deletingLastPathComponent().appendingPathComponent("test-records.json") }
     private lazy var testJournal = TestJournal(fileURL: testJournalURL)
     private var suppressTestReply = false
@@ -94,6 +96,7 @@ final class CompanionController: ObservableObject {
         showWelcome = !defaults.bool(forKey: "welcomeSeen")
         self.dataURL = dataURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("HerHis", isDirectory: true).appendingPathComponent("memories.json")
+        callHistory = CallHistoryModel(fileURL: self.dataURL.deletingLastPathComponent().appendingPathComponent("call-history.json"), defaults: defaults)
         do {
             store = try MemoryStore(fileURL: self.dataURL, ownerID: NSUserName())
             memories = store?.memories ?? []
@@ -138,13 +141,16 @@ final class CompanionController: ObservableObject {
         }
         self.realtime.onAssistantTestRecord = { [weak self] text, source in
             let allowed = source.map { !MemoryPolicy.preventMemoryStorage(in: $0) } ?? false
-            self?.recordTest("assistant", allowed ? text : "[原话未就绪或隐私回合，回答文字已省略]")
+            let savedText = allowed ? text : "[原话未就绪或隐私回合，回答文字已省略]"
+            self?.recordTest("assistant", savedText)
+            self?.callHistory.append(role: "assistant", text: savedText)
         }
         self.realtime.onMemoryUpdate = { [weak self] args, source in self?.applyRealtimeMemory(args, source: source) ?? "未保存：记忆不可用。" }
         self.realtime.onFailure = { [weak self] message in
             guard let self else { return }; self.disableVoice(); self.phase = .unavailable; self.errorText = message
         }
         realtimeChanges = self.realtime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        historyChanges = callHistory.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         sleepObserver = workspaceNotifications.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.prepareForSleep() }
         }
@@ -160,6 +166,10 @@ final class CompanionController: ObservableObject {
         errorText = "Mac 即将休眠，通话已结束。唤醒后点“打电话”即可重新接通。"
     }
     var microphoneRunning: Bool { speech.isRunning || realtime.isActive }
+    var recordingDescription: String {
+        if callHistory.enabled { return testRecordingEnabled ? "本机通话历史与测试记录已开启 · 不保存录音" : "本机通话历史已开启 · 不保存录音" }
+        return testRecordingEnabled ? "历史保存关闭 · 本机测试记录仍在保存文字" : "历史与测试记录关闭 · 不新增聊天记录"
+    }
     func setTestRecordingEnabled(_ enabled: Bool) {
         testRecordingEnabled = enabled; defaults.set(enabled, forKey: "testRecordingEnabled")
         if enabled { recordTest("status", "本机测试记录已开启") }
@@ -177,7 +187,9 @@ final class CompanionController: ObservableObject {
         lines.append(.init(role: role, text: text))
         guard record else { return }
         if role == "user" { suppressTestReply = MemoryPolicy.preventMemoryStorage(in: text) }
-        recordTest(role, suppressTestReply ? "[隐私回合内容已省略]" : text)
+        let savedText = suppressTestReply ? "[隐私回合内容已省略]" : text
+        recordTest(role, savedText)
+        callHistory.append(role: role, text: savedText)
     }
     var micDescription: String {
         if realtime.isActive { return realtime.state == .connecting ? "正在连接 · 请稍等再说" : "实时语音 · 音频传至 \(realtime.provider.title)" }
@@ -292,6 +304,7 @@ final class CompanionController: ObservableObject {
     }
 
     func disableVoice() {
+        callHistory.finish()
         phoneCall = false
         realtime.stop()
         voiceEpoch += 1
@@ -301,6 +314,7 @@ final class CompanionController: ObservableObject {
         phase = .off
     }
     func mute() {
+        callHistory.finish()
         realtime.stop()
         voiceEpoch += 1
         cancelOutput(); speech.stop(); partial = ""; level = 0
@@ -317,6 +331,7 @@ final class CompanionController: ObservableObject {
     }
     func endConversation() {
         if phoneCall { disableVoice(); return }
+        callHistory.finish()
         let wasRealtime = realtime.isActive
         realtime.stop()
         let wasMuted = isMuted
@@ -331,6 +346,7 @@ final class CompanionController: ObservableObject {
         } else { phase = wasMuted ? .muted : .off }
     }
     private func openConversation() {
+        callHistory.begin(companion: companionName, provider: "本机")
         cancelOutput(); gate.open(); listeningOnly = false; history.removeAll(); lines.removeAll()
         phase = .listening; partial = ""; lastPartial = ""; completingWakeUtterance = false
     }
@@ -437,10 +453,15 @@ final class CompanionController: ObservableObject {
         if !gate.isOpen { openConversation() }
         cancelOutput()
         let command = normalized(text)
-        if ["关闭麦克风", "停止监听", "关闭语音唤起"].contains(command) { disableVoice(); return }
+        if ["关闭麦克风", "停止监听", "关闭语音唤起"].contains(command) { appendLine(role: "user", text: text); disableVoice(); return }
         if ["晚安", "我要睡了", "我要睡了晚安", "不聊了", "结束对话", "不是叫你"].contains(command) {
+            let farewell = text.contains("晚安") || text.contains("睡") ? "晚安。" : "好。"
+            if command != "不是叫你" {
+                appendLine(role: "user", text: text)
+                if !phoneCall, !textOnly, speech.isRunning { appendLine(role: "assistant", text: farewell) }
+            }
             endConversation()
-            if command != "不是叫你" { speak(text.contains("晚安") || text.contains("睡") ? "晚安。" : "好。") }
+            if command != "不是叫你" { speak(farewell) }
             return
         }
         if ["忘掉所有记忆", "清除全部记忆", "删除所有记忆"].contains(command) {
@@ -495,6 +516,7 @@ final class CompanionController: ObservableObject {
                     answer = "记忆暂时无法操作，这次没有删除成功。"
                 }
                 if response.endConversation && !forget {
+                    self.callHistory.append(role: "assistant", text: privateTurn ? "[隐私回合内容已省略]" : answer)
                     self.endConversation()
                     self.appendLine(role: "assistant", text: answer)
                     self.speak(answer)
@@ -548,6 +570,7 @@ final class CompanionController: ObservableObject {
         voiceEpoch += 1; cancelOutput(); speech.stop(); realtime.stop()
         gate.open(); history.removeAll(); lines.removeAll(); partial = ""; lastPartial = ""
         wakeEnabled = true; speechAvailable = true; textOnly = false; errorText = nil
+        callHistory.begin(companion: companionName, provider: realtime.provider.title)
         do {
             try realtime.start(configuration: .init(name: companionName, model: realtime.model, voice: realtime.voice,
                                                     memories: memories, memoryEnabled: memoryEnabled), initialText: initialText)

@@ -34,6 +34,7 @@ struct CompanionRootView: View {
                 }
                 switch model.selectedPage {
                 case "memories": memoryPage
+                case "history": CallHistoryView(model: model.callHistory)
                 case "settings": settingsPage
                 default: presencePage
                 }
@@ -88,6 +89,7 @@ struct CompanionRootView: View {
             Text("HER / HIS").font(.system(size: 9, weight: .medium)).tracking(3).foregroundStyle(Palette.muted)
                 .padding(.leading, 1).padding(.bottom, 48)
             navItem("在你身边", symbol: "waveform", page: "presence")
+            navItem("聊过的话", symbol: "clock", page: "history")
             navItem("慢慢记得", symbol: "leaf", page: "memories")
             navItem("相处设置", symbol: "slider.horizontal.3", page: "settings")
             Spacer()
@@ -117,7 +119,7 @@ struct CompanionRootView: View {
     }
     private var topbar: some View {
         HStack {
-            Text(model.selectedPage == "presence" ? "一段属于你的时间" : (model.selectedPage == "memories" ? "在相处里，慢慢了解你" : "让相处更自在"))
+            Text(model.selectedPage == "presence" ? "一段属于你的时间" : (model.selectedPage == "history" ? "那些一起聊过的时刻" : (model.selectedPage == "memories" ? "在相处里，慢慢了解你" : "让相处更自在")))
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)
             Spacer()
             HStack(spacing: 7) {
@@ -151,7 +153,10 @@ struct CompanionRootView: View {
             if !model.realtime.memoryContextStatus.isEmpty {
                 Text(model.realtime.memoryContextStatus).font(.caption).foregroundStyle(Palette.muted)
             }
-            Text(model.testRecordingEnabled ? "本机测试记录开启 · 正在保存对话文字" : "本机不保存完整聊天 · 记忆由你随时管理")
+            if let error = model.callHistory.error {
+                Text(error).font(.system(size: 11)).foregroundStyle(.orange).padding(.horizontal, 34)
+            }
+            Text(model.recordingDescription)
                 .font(.system(size: 9)).foregroundStyle(Palette.muted.opacity(0.7)).padding(.bottom, 22)
         }
     }
@@ -240,7 +245,7 @@ struct CompanionRootView: View {
                 }
             }
             HStack {
-                Text(model.testRecordingEnabled ? "本机测试记录开启 · 保存对话文字，不保存录音" : (model.memoryEnabled ? "自动保存开启 · 不保存完整聊天或录音" : "新记忆暂停保存 · 已有记忆仍可用于对话"))
+                Text(model.memoryEnabled ? "自动记忆开启 · 通话历史在“聊过的话”单独管理" : "新记忆暂停保存 · 已有记忆仍可用于对话")
                     .font(.system(size: 10)).foregroundStyle(Palette.muted)
                 Spacer()
                 if !model.memories.isEmpty { Button("清除全部") { confirmClear = true }.buttonStyle(.plain).foregroundStyle(.secondary).font(.system(size: 11)) }
@@ -259,6 +264,14 @@ struct CompanionRootView: View {
                 }
                 settingCard("实时语音", caption: "像通话一样交流，声音直接传入模型。") {
                     RealtimeSettingsView(realtime: model.realtime, controller: model)
+                }
+                settingCard("通话历史", caption: "按通话保存双方文字，在“聊过的话”回看。") {
+                    Toggle("保存通话历史", isOn: Binding(get: { model.callHistory.enabled }, set: model.callHistory.setEnabled))
+                    Text("只保存在本机，不保存录音；隐私回合、凭据或原话未就绪的回答会省略。关闭后立即停止新增；重新开启从下次通话开始。已有历史保留到你删除，容量上限32MB，达到后提示停止新增。")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("历史不会自动全部发给模型，也不等于长期记忆。测试记录是独立开关。")
+                        .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    if let error = model.callHistory.error { Text(error).font(.system(size: 12)).foregroundStyle(.orange) }
                 }
                 settingCard("本机测试记录", caption: "用于排查漏记和对话问题，与长期记忆分开保存。") {
                     Toggle("保存测试对话", isOn: Binding(get: { model.testRecordingEnabled }, set: model.setTestRecordingEnabled))
@@ -314,6 +327,7 @@ struct CompanionRootView: View {
                 Label("可选本机对话，或直接传送音频的云端实时对话。", systemImage: "desktopcomputer")
                 Label("本机模式也可单独选用 ElevenLabs 声音。", systemImage: "waveform")
                 Label("自动记住有用的小事，随时查看、纠正或删除。", systemImage: "leaf")
+                Label("默认在本机保存通话文字，可在设置关闭，在历史页删除。", systemImage: "clock")
             }.font(.system(size: 12)).foregroundStyle(.secondary)
             Text("本机对话引擎会自动准备。开启语音时，macOS 会询问麦克风和语音识别权限。")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)

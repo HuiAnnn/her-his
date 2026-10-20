@@ -13,7 +13,7 @@ spec.loader.exec_module(publish)
 
 class PublicationTests(unittest.TestCase):
     def test_sensitive_files_and_personal_text_block_before_external_scan(self):
-        cases = [('.env', 'fixture'), ('memories.json', '{}'), ('signing.p12', 'fixture'),
+        cases = [('.env', 'fixture'), ('memories.json', '{}'), ('call-history.json', '{}'), ('signing.p12', 'fixture'),
                  ('source.swift', '/Users/' + 'example' + '/private'),
                  ('README.md', 'person' + '@' + 'example.invalid')]
         for name, content in cases:

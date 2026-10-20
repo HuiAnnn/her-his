@@ -19,3 +19,5 @@ recordings/
 private/
 __pycache__/
 *.pyc
+
+call-history*

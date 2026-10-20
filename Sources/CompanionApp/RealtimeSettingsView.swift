@@ -13,7 +13,7 @@ struct RealtimeSettingsView: View {
             }
             Text("她直接接收声音并用声音回应；字幕只用于显示与记忆核对。语音交流不需要 ElevenLabs 或本机对话模型。")
                 .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("实时通话接通期间，麦克风音频、临时对话，以及开启自动记忆时的近期记忆会发送给\(realtime.provider.title)。应用不保存录音；\(controller.testRecordingEnabled ? "本机测试记录正在保存对话文字" : "测试记录关闭时不新增完整聊天记录")。云端数据保留以服务商政策和账户设置为准。")
+            Text("实时通话接通期间，麦克风音频、临时对话，以及开启自动记忆时的近期记忆会发送给\(realtime.provider.title)。\(controller.recordingDescription)。云端数据保留以服务商政策和账户设置为准。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if realtime.provider == .doubao {
                 HStack {
