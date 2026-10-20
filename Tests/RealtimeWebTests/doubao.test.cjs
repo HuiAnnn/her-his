@@ -16,15 +16,15 @@ test('samples clip to signed little endian without wrapping',()=>{
   assert.equal(new DataView(frames[1]).getInt16(0,true),32767);
 });
 const fs=require('node:fs'), vm=require('node:vm');
-function setupMedia(){
+function setupMedia({resumeState='running'}={}){
   const messages=[],contexts=[],worklets=[],tracks=[{stop(){this.stopped=true;}}];let resolve;
   const connectable=()=>({connect(){},disconnect(){}});
   class Context {
-    constructor(){contexts.push(this);this.currentTime=0;this.audioWorklet={addModule:async()=>{}};this.destination={};this.sources=[];}
+    constructor(){contexts.push(this);this.state='suspended';this.currentTime=0;this.audioWorklet={addModule:async()=>{}};this.destination={};this.sources=[];}
     createMediaStreamSource(){return connectable();} createGain(){return {...connectable(),gain:{value:0}};}
     createBuffer(_,n,rate){return {duration:n/rate,getChannelData:()=>new Float32Array(n)};}
     createBufferSource(){const source={...connectable(),start(t){this.started=t;},stop(){this.stopped=true;}};this.sources.push(source);return source;}
-    async resume(){} async close(){this.closed=true;}
+    async resume(){this.state=resumeState;} async close(){this.closed=true;this.state='closed';this.onstatechange?.();}
   }
   class Worklet{constructor(){worklets.push(this);this.port={};}connect(){}disconnect(){}}
   const context={window:{webkit:{messageHandlers:{doubao:{postMessage:x=>messages.push(x)}}}},navigator:{mediaDevices:{getUserMedia:()=>new Promise(r=>resolve=r)}},AudioContext:Context,AudioWorkletNode:Worklet,Blob,URL,btoa,atob};
@@ -54,4 +54,31 @@ test('playback completion waits for actual drain; interrupt returns played durat
 test('interrupt between sentence start and first PCM truncates the known reply to zero',async()=>{
   const x=setupMedia(),p=x.api.start();x.resolve();await p;
   x.api.begin('r0');const result=x.api.interrupt();assert.equal(result.id,'r0');assert.equal(result.ms,0);x.api.stop();
+});
+test('audio context interruption ends capture and playback exactly once',async()=>{
+  for(const state of ['suspended','interrupted','closed']){
+    const x=setupMedia(),p=x.api.start();x.resolve();await p;x.api.activate();
+    x.api.play(Buffer.alloc(48000).toString('base64'),'r1');
+    const c=x.contexts[0];c.state=state;c.onstatechange?.();c.onstatechange?.();
+    assert.equal(x.tracks[0].stopped,true);
+    assert.equal(c.closed,true);assert.equal(c.sources[0].stopped,true);
+    assert.equal(x.worklets[0].port.onmessage,null);
+    assert.equal(x.messages.filter(m=>m.kind==='failure').length,1);
+    assert.equal(x.messages.at(-1).code,'audio_interrupted');
+  }
+});
+test('audio that cannot resume never reports a usable capture session',async()=>{
+  const x=setupMedia({resumeState:'interrupted'}),p=x.api.start();x.resolve();
+  assert.equal(await p,false);
+  assert.equal(x.tracks[0].stopped,true);
+  assert.equal(x.messages.at(-1).kind,'failure');
+});
+test('normal hangup and stale audio callbacks cannot fail a new call',async()=>{
+  const x=setupMedia();let p=x.api.start();x.resolve();await p;
+  const c=x.contexts[0],late=c.onstatechange;
+  x.api.stop();assert.equal(x.messages.length,0);
+  p=x.api.start();x.resolve();await p;
+  c.state='interrupted';late?.();
+  assert.equal(x.messages.length,0);assert.notEqual(x.contexts[1].closed,true);
+  x.api.stop();
 });

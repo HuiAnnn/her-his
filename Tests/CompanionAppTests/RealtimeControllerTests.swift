@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import CompanionCore
 @testable import CompanionApp
 
@@ -77,6 +78,31 @@ import CompanionCore
         controller.startCall()
         XCTAssertEqual(driver.starts, 2)
         XCTAssertTrue(controller.callInProgress)
+    }
+    func testSleepEndsCallAndLateReadyCannotResumeIt() {
+        let (controller, realtime, driver, speech, directory) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        controller.startCall()
+        let lateReady = driver.onReady
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        lateReady?()
+        XCTAssertFalse(controller.callInProgress)
+        XCTAssertFalse(controller.microphoneRunning)
+        XCTAssertFalse(speech.isRunning)
+        XCTAssertEqual(realtime.state, .idle)
+        XCTAssertTrue(controller.errorText?.contains("休眠") == true)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
+        XCTAssertEqual(driver.starts, 1)
+        controller.startCall(); driver.onReady?()
+        XCTAssertEqual(driver.starts, 2)
+        XCTAssertEqual(controller.phase, .listening)
+    }
+    func testSleepWhileIdleDoesNotCreateAnError() {
+        let (controller, _, _, _, directory) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        XCTAssertNil(controller.errorText)
+        XCTAssertFalse(controller.callInProgress)
     }
     func testRealtimeMemoryUsesRealStoreAndEditingClosesCloudContext() throws {
         let (controller, realtime, driver, _, directory) = fixture()

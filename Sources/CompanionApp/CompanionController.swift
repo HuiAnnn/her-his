@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Combine
 import CompanionCore
 
@@ -74,6 +75,8 @@ final class CompanionController: ObservableObject {
     private var textOnly = true
     private var listeningOnly = false
     private var phoneCall = false
+    private let workspaceNotifications = NSWorkspace.shared.notificationCenter
+    private var sleepObserver: NSObjectProtocol?
 
     init(dataURL: URL? = nil, speech: (any SpeechDriving)? = nil, defaults: UserDefaults = .standard, cloudVoice: CloudVoiceOutput? = nil, realtime: RealtimeConversation? = nil, localRuntime: (any LocalModelStarting)? = nil, clientFactory: @escaping (String) -> any ModelServing = { OllamaClient(model: $0) }) {
         self.defaults = defaults
@@ -142,9 +145,20 @@ final class CompanionController: ObservableObject {
             guard let self else { return }; self.disableVoice(); self.phase = .unavailable; self.errorText = message
         }
         realtimeChanges = self.realtime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        sleepObserver = workspaceNotifications.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.prepareForSleep() }
+        }
         if testRecordingEnabled { recordTest("status", "应用启动，本机测试记录开启") }
     }
 
+    deinit {
+        if let sleepObserver { workspaceNotifications.removeObserver(sleepObserver) }
+    }
+    private func prepareForSleep() {
+        guard callInProgress || isMuted else { return }
+        disableVoice()
+        errorText = "Mac 即将休眠，通话已结束。唤醒后点“打电话”即可重新接通。"
+    }
     var microphoneRunning: Bool { speech.isRunning || realtime.isActive }
     func setTestRecordingEnabled(_ enabled: Bool) {
         testRecordingEnabled = enabled; defaults.set(enabled, forKey: "testRecordingEnabled")
@@ -640,5 +654,8 @@ final class CompanionController: ObservableObject {
             return changed ? "记忆已保存到本机。" : "没有新增记忆：内容已存在，或没有通过原话证据与拒存检查。不要宣称保存成功。"
         } catch { memories = store.memories; return "记忆操作未完成，请用户到记忆页查看；不要宣称成功。" }
     }
-    func shutdown() { connectionEpoch += 1; disableVoice(); localRuntime.stop() }
+    func shutdown() {
+        if let sleepObserver { workspaceNotifications.removeObserver(sleepObserver); self.sleepObserver = nil }
+        connectionEpoch += 1; disableVoice(); localRuntime.stop()
+    }
 }

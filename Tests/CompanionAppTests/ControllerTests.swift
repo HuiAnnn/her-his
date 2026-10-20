@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import CompanionCore
 @testable import CompanionApp
 
@@ -129,6 +130,26 @@ import CompanionCore
         XCTAssertFalse(speech.isRunning)
         XCTAssertFalse(speech.isSpeaking)
         XCTAssertFalse(controller.wakeEnabled)
+    }
+    func testSleepCancelsPendingPermissionAndStopsLocalPlayback() async throws {
+        let (controller, speech, _, directory, _) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        speech.suspendPermission = true
+        controller.startCall()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        speech.permission?.resume(); speech.permission = nil
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertFalse(speech.isRunning)
+        XCTAssertFalse(controller.callInProgress)
+        speech.suspendPermission = false
+        controller.startCall()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        speech.speak("合成声音")
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.willSleepNotification, object: nil)
+        XCTAssertFalse(speech.isRunning)
+        XCTAssertFalse(speech.isSpeaking)
+        XCTAssertFalse(controller.callInProgress)
     }
     func testModelFailureReturnsVoiceToWakeOnly() async throws {
         let (controller, speech, client, directory, _) = fixture()

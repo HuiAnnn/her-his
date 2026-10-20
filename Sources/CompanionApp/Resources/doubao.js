@@ -38,10 +38,10 @@ if(typeof window!=='undefined') (()=>{
   }
   function stop() {
     ++epoch; upload=false; pending=0; clear();
-    stream?.getTracks().forEach(t=>t.stop()); stream=null;
+    stream?.getTracks().forEach(t=>{t.onended=null;t.stop();}); stream=null;
     if(node) {node.port.onmessage=null; node.disconnect(); node=null;}
     mic?.disconnect(); mic=null; sink?.disconnect(); sink=null;
-    if(ctx){const old=ctx;ctx=null;old.close().catch(()=>{});}
+    if(ctx){const old=ctx;ctx=null;old.onstatechange=null;old.close().catch(()=>{});}
   }
   function finish() {
     if(ended&&!nodes.length&&response&&!draining){draining=true;post('played',{id:response});}
@@ -64,7 +64,17 @@ if(typeof window!=='undefined') (()=>{
         post('audio',{data:encode(data)});
       };
       media.getTracks().forEach(track=>{track.onended=()=>{if(token===epoch){stop();post('failure');}};});
-      await audio.resume(); return token===epoch;
+      await audio.resume();
+      if(token!==epoch)return false;
+      // An interrupted context can resolve resume() without actually running.
+      // End this call rather than leaving capture and a silent connection alive.
+      audio.onstatechange=()=>{
+        if(token===epoch&&ctx===audio&&audio.state!=='running'){
+          stop();post('failure',{code:'audio_interrupted'});
+        }
+      };
+      audio.onstatechange();
+      return token===epoch;
     },
     activate(){upload=true;}, ack(){pending=Math.max(0,pending-1);},
     begin(id){if(response!==id){clear();response=id;}},

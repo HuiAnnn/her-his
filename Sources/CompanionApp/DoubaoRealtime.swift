@@ -255,7 +255,10 @@ import CompanionCore
             enqueue(event: 200, audio: data)
         case "played":
             if let id = body["id"] as? String { playbackFinished(id) }
-        case "failure": fail("音频设备或缓冲区中断，麦克风已关闭，请重新开启。")
+        case "failure":
+            fail(body["code"] as? String == "audio_interrupted"
+                 ? "声音被系统暂停，通话已结束。请确认音频设备可用后，重新打电话。"
+                 : "音频设备或缓冲区中断，麦克风已关闭。请重新打电话。")
         default: break
         }
     }
