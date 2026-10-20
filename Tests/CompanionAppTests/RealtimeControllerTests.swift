@@ -37,6 +37,47 @@ import CompanionCore
         XCTAssertTrue(controller.isMuted)
         XCTAssertFalse(controller.microphoneRunning)
     }
+    func testPhoneCallConnectsOnceAndHangupRejectsLateReady() {
+        let (controller, realtime, driver, speech, directory) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        controller.startCall(); controller.startCall()
+        XCTAssertEqual(driver.starts, 1)
+        XCTAssertEqual(controller.phase, .connecting)
+        XCTAssertTrue(controller.callInProgress)
+        XCTAssertFalse(speech.isRunning)
+        let lateReady = driver.onReady
+        controller.disableVoice(); lateReady?()
+        XCTAssertFalse(controller.callInProgress)
+        XCTAssertFalse(controller.microphoneRunning)
+        XCTAssertFalse(controller.wakeEnabled)
+        XCTAssertEqual(realtime.state, .idle)
+        controller.startCall(); driver.onReady?()
+        XCTAssertEqual(driver.starts, 2)
+        XCTAssertEqual(controller.phase, .listening)
+    }
+    func testPhoneCallGoodbyeStopsCaptureWithoutReturningToWakeMode() async throws {
+        let (controller, realtime, driver, speech, directory) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        controller.startCall(); driver.onReady?()
+        driver.event("input_audio_buffer.committed", ["item_id": "goodbye"])
+        driver.event("conversation.item.input_audio_transcription.completed", ["item_id": "goodbye", "transcript": "先不聊了"])
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(realtime.state, .idle)
+        XCTAssertFalse(controller.callInProgress)
+        XCTAssertFalse(speech.isRunning)
+        XCTAssertFalse(controller.wakeEnabled)
+    }
+    func testFailedPhoneCallReturnsToIdleAndCanRetry() {
+        let (controller, _, driver, _, directory) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        controller.startCall(); driver.onFailure?("Synthetic connection failure")
+        XCTAssertFalse(controller.callInProgress)
+        XCTAssertFalse(controller.microphoneRunning)
+        XCTAssertNotNil(controller.errorText)
+        controller.startCall()
+        XCTAssertEqual(driver.starts, 2)
+        XCTAssertTrue(controller.callInProgress)
+    }
     func testRealtimeMemoryUsesRealStoreAndEditingClosesCloudContext() throws {
         let (controller, realtime, driver, _, directory) = fixture()
         defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }

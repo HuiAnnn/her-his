@@ -7,11 +7,11 @@
 <key>CFBundleExecutable</key><string>HerHis</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.3.5</string>
-<key>CFBundleVersion</key><string>10</string>
+<key>CFBundleShortVersionString</key><string>0.3.6</string>
+<key>CFBundleVersion</key><string>11</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSMicrophoneUsageDescription</key><string>开启语音后检测你的呼唤。本机模式在设备上识别；开启实时模式并接通对话后，音频发送给你选择的豆包或 OpenAI。你可以随时关闭，应用不保存录音。</string>
+<key>NSMicrophoneUsageDescription</key><string>打电话时使用麦克风。本机模式在设备上识别；实时模式接通后，音频发送给你选择的豆包或 OpenAI。挂电话后停止收音，应用不保存录音。</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>只使用本机中文语音识别，将你的话用于陪伴交流。不支持本机识别时不会使用云端回退。</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>

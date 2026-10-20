@@ -13,7 +13,7 @@ struct RealtimeSettingsView: View {
             }
             Text("她直接接收声音并用声音回应；字幕只用于显示与记忆核对。语音交流不需要 ElevenLabs 或本机对话模型。")
                 .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text("待机呼唤留在本机。实时对话接通期间，麦克风音频、临时对话，以及开启自动记忆时的近期记忆会发送给\(realtime.provider.title)。应用不保存录音；\(controller.testRecordingEnabled ? "本机测试记录正在保存对话文字" : "测试记录关闭时不新增完整聊天记录")。云端数据保留以服务商政策和账户设置为准。")
+            Text("实时通话接通期间，麦克风音频、临时对话，以及开启自动记忆时的近期记忆会发送给\(realtime.provider.title)。应用不保存录音；\(controller.testRecordingEnabled ? "本机测试记录正在保存对话文字" : "测试记录关闭时不新增完整聊天记录")。云端数据保留以服务商政策和账户设置为准。")
                 .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if realtime.provider == .doubao {
                 HStack {
@@ -53,18 +53,10 @@ struct RealtimeSettingsView: View {
                     Text("Cedar").tag("cedar")
                 }
             }
-            HStack {
-                Button("开始实时对话") {
-                    controller.setRealtimeEnabled(true)
-                    controller.selectedPage = "presence"
-                    controller.enableVoice(startConversation: true)
-                }.disabled(realtime.state == .connecting)
-                Spacer()
-                Button("移除当前服务凭证") { controller.disableVoice(); realtime.removeKey() }
-            }
+            Button("移除当前服务凭证") { controller.disableVoice(); realtime.removeKey() }
             Text(realtime.message).font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("接通后再说话。唤醒时连说的第一句话会以本机识别的文字接续；连接后的交流直接使用声音。静音会结束云端会话，恢复时重新连接。")
+            Text("配置后回到「在你身边」，点“打电话”即可连接。点“挂电话”结束通话并停止收音。")
                 .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .onChange(of: realtime.provider) { _, _ in controller.disableVoice() }

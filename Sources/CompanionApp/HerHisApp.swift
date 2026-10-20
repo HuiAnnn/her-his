@@ -14,8 +14,7 @@ struct HerHisApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandMenu("陪伴") {
-                Button("结束这次对话") { model.endConversation() }.keyboardShortcut("e", modifiers: [.command])
-                Button("关闭麦克风") { model.disableVoice() }.keyboardShortcut("m", modifiers: [.command, .shift])
+                Button("挂电话") { model.disableVoice() }.keyboardShortcut("e", modifiers: [.command])
             }
         }
     }

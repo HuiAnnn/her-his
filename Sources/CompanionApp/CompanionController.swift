@@ -14,7 +14,7 @@ enum PresencePhase: String {
         switch self {
         case .off: return "安静地在这里"
         case .waiting: return "等你叫我的名字"
-        case .connecting: return "正在接通实时语音"
+        case .connecting: return "正在接通…"
         case .listening: return "我在听"
         case .thinking: return "想一想，再回应你"
         case .speaking: return "正在回应你"
@@ -73,6 +73,7 @@ final class CompanionController: ObservableObject {
     private var voiceEpoch = 0
     private var textOnly = true
     private var listeningOnly = false
+    private var phoneCall = false
 
     init(dataURL: URL? = nil, speech: (any SpeechDriving)? = nil, defaults: UserDefaults = .standard, cloudVoice: CloudVoiceOutput? = nil, realtime: RealtimeConversation? = nil, localRuntime: (any LocalModelStarting)? = nil, clientFactory: @escaping (String) -> any ModelServing = { OllamaClient(model: $0) }) {
         self.defaults = defaults
@@ -171,13 +172,21 @@ final class CompanionController: ObservableObject {
         return phase == .waiting ? "仅在本机检测呼唤" : "本机听写 · 不保存录音"
     }
     var canEnd: Bool { gate.isOpen || realtime.isActive }
+    var callInProgress: Bool { phase == .connecting || wakeEnabled || microphoneRunning || canEnd }
     var isMuted: Bool { phase == .muted }
+
+    func startCall() {
+        guard !callInProgress else { return }
+        phoneCall = true; phase = .off
+        enableVoice(startConversation: true)
+    }
 
     func previewVoice() {
         // The fixed sample must not be transcribed as a new conversation turn.
         // Also invalidate an enableVoice() still awaiting the permission dialog.
         voiceEpoch += 1
-        if microphoneRunning { mute() }
+        if phoneCall { disableVoice() }
+        else if microphoneRunning { mute() }
         else { interrupt() }
         cloudVoice.preview()
     }
@@ -190,7 +199,7 @@ final class CompanionController: ObservableObject {
         if realtime.isActive { disableVoice() }
         let clean = companionName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard clean.count >= 2, clean.count <= 8 else {
-            errorText = "名字请使用 2–8 个字，避免过短造成误唤起。"; return
+            errorText = "名字请使用 2–8 个字。"; return
         }
         guard !modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorText = "请填写本机已有的模型名称。"; return
@@ -248,6 +257,7 @@ final class CompanionController: ObservableObject {
         voiceEpoch += 1
         let epoch = voiceEpoch
         errorText = nil
+        if startConversation { phase = .connecting }
         Task {
             do {
                 try await speech.requestPermission()
@@ -260,7 +270,7 @@ final class CompanionController: ObservableObject {
                 else { gate.close(); history.removeAll(); lines.removeAll(); phase = .waiting }
             } catch {
                 guard epoch == voiceEpoch else { return }
-                speech.stop(); speechAvailable = false; wakeEnabled = false; textOnly = true
+                speech.stop(); speechAvailable = false; wakeEnabled = false; textOnly = true; phoneCall = false
                 phase = .unavailable
                 errorText = error.localizedDescription
             }
@@ -268,6 +278,7 @@ final class CompanionController: ObservableObject {
     }
 
     func disableVoice() {
+        phoneCall = false
         realtime.stop()
         voiceEpoch += 1
         wakeEnabled = false; speechAvailable = false; textOnly = true
@@ -291,6 +302,7 @@ final class CompanionController: ObservableObject {
         if gate.isOpen && phase != .muted { phase = .listening }
     }
     func endConversation() {
+        if phoneCall { disableVoice(); return }
         let wasRealtime = realtime.isActive
         realtime.stop()
         let wasMuted = isMuted
@@ -481,7 +493,7 @@ final class CompanionController: ObservableObject {
             } catch {
                 guard let self, !Task.isCancelled, self.gate.accepts(token) else { return }
                 self.endConversation()
-                self.errorText = "这次没有接上，对话已停下。可以重新叫我或发送文字。\(error.localizedDescription)"
+                self.errorText = "这次没有接上，对话已停下。可以重新打电话。\(error.localizedDescription)"
             }
         }
     }

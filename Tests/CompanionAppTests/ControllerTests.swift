@@ -101,6 +101,35 @@ import CompanionCore
         XCTAssertFalse(speech.isRunning)
         XCTAssertFalse(controller.canEnd)
     }
+    func testDirectCallShowsConnectingWhilePermissionIsPending() async throws {
+        let (controller, speech, _, directory, _) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        speech.suspendPermission = true
+        controller.startCall()
+        XCTAssertEqual(controller.phase, .connecting)
+        XCTAssertTrue(controller.callInProgress)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        controller.disableVoice()
+        speech.permission?.resume(); speech.permission = nil
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertFalse(speech.isRunning)
+        XCTAssertEqual(controller.phase, .off)
+        XCTAssertFalse(controller.callInProgress)
+    }
+    func testLocalPhoneCallHangupStopsCaptureAndPlayback() async throws {
+        let (controller, speech, _, directory, _) = fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        controller.startCall()
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertEqual(controller.phase, .listening)
+        XCTAssertTrue(speech.isRunning)
+        speech.speak("合成测试语音")
+        controller.disableVoice()
+        XCTAssertFalse(controller.callInProgress)
+        XCTAssertFalse(speech.isRunning)
+        XCTAssertFalse(speech.isSpeaking)
+        XCTAssertFalse(controller.wakeEnabled)
+    }
     func testModelFailureReturnsVoiceToWakeOnly() async throws {
         let (controller, speech, client, directory, _) = fixture()
         defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }

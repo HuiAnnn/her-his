@@ -37,6 +37,9 @@ struct CompanionRootView: View {
                 case "settings": settingsPage
                 default: presencePage
                 }
+                if model.selectedPage != "presence" && model.callInProgress {
+                    controls.padding(.vertical, 20)
+                }
             }
         }
         .background(alignment: .bottomTrailing) {
@@ -91,9 +94,9 @@ struct CompanionRootView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 6) {
                     Circle().fill(model.modelAvailable ? Palette.accent : Palette.muted).frame(width: 5, height: 5)
-                    Text(model.realtime.enabled ? (model.realtime.isActive ? "云端实时陪伴" : "实时语音 · 等你开启") : (model.modelAvailable ? "本机陪伴" : (model.checkingConnection ? "正在准备本机陪伴…" : "等待模型连接"))).font(.system(size: 11))
+                    Text(model.realtime.enabled ? (model.realtime.isActive ? "云端实时陪伴" : "等你打来") : (model.modelAvailable ? "本机陪伴" : (model.checkingConnection ? "正在准备本机陪伴…" : "等待模型连接"))).font(.system(size: 11))
                 }
-                Text(model.realtime.enabled ? "呼唤在本机。\n实时对话会传送音频。" : "麦克风与记忆在本机。\n云端声音可在设置开启。").font(.system(size: 11)).lineSpacing(5).foregroundStyle(Palette.muted)
+                Text(model.realtime.enabled ? "通话时传送音频。\n挂断后停止收音。" : "麦克风与记忆在本机。\n云端声音可在设置开启。").font(.system(size: 11)).lineSpacing(5).foregroundStyle(Palette.muted)
             }.padding(.bottom, 30)
         }
         .padding(.horizontal, 24).frame(width: 188).background(Palette.panel.opacity(0.45))
@@ -130,7 +133,7 @@ struct CompanionRootView: View {
                 .frame(height: model.lines.isEmpty ? 196 : 130)
             Text(model.phase.title).font(.system(size: model.lines.isEmpty ? 30 : 23, weight: .regular, design: .serif))
                 .padding(.top, 8)
-            Text(model.realtime.isActive ? (model.realtime.state == .connecting ? "接通后再说话，稍等一下。" : "声音直接相连，你可以随时插话。") : (model.wakeEnabled ? "叫一声「\(model.companionName)」，想说什么都可以。" : "想说话的时候，我在。"))
+            Text(model.phase == .connecting ? "稍等一下，正在接通。" : (model.callInProgress ? "我在这里，想说什么都可以。" : "想说话的时候，给我打个电话。"))
                 .font(.system(size: 12)).foregroundStyle(Palette.muted).padding(.top, 12)
             if model.lines.isEmpty {
                 Spacer(minLength: 28)
@@ -145,7 +148,6 @@ struct CompanionRootView: View {
                     .lineLimit(2).padding(.horizontal, 36).padding(.bottom, 10)
             }
             controls.padding(.top, 20).padding(.bottom, 24)
-            composer.padding(.horizontal, 34).padding(.bottom, 14)
             if !model.realtime.memoryContextStatus.isEmpty {
                 Text(model.realtime.memoryContextStatus).font(.caption).foregroundStyle(Palette.muted)
             }
@@ -186,55 +188,17 @@ struct CompanionRootView: View {
         }
     }
     private var controls: some View {
-        HStack(spacing: 12) {
-            if !model.wakeEnabled {
-                Button { model.enableVoice() } label: {
-                    Label("开启语音陪伴", systemImage: "waveform").font(.system(size: 13, weight: .medium))
-                        .padding(.horizontal, 22).padding(.vertical, 13)
-                        .foregroundStyle(Palette.background).background(Palette.accent).clipShape(Capsule())
-                }.buttonStyle(.plain)
-                if model.realtime.enabled {
-                    Button("直接聊聊") { model.enableVoice(startConversation: true) }.buttonStyle(.bordered)
-                }
-            } else {
-                circleButton(model.isMuted ? "mic.slash.fill" : "mic.fill", help: model.isMuted ? "取消静音" : "静音麦克风") {
-                    model.isMuted ? model.unmute() : model.mute()
-                }
-                Button { model.enableVoice(startConversation: true) } label: {
-                    Text(model.canEnd ? "重新开始" : "直接聊聊").font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 24).padding(.vertical, 13)
-                        .foregroundStyle(Palette.background).background(Palette.accent).clipShape(Capsule())
-                }.buttonStyle(.plain).disabled(model.phase == .connecting)
-                circleButton("power", help: "完全关闭麦克风与唤起") { model.disableVoice() }
-            }
-            if model.phase == .speaking || model.phase == .thinking {
-                circleButton("stop.fill", help: "打断回应") { model.interrupt() }
-            }
-            if model.canEnd {
-                Button("结束这次对话") { model.endConversation() }.buttonStyle(.plain)
-                    .font(.system(size: 11)).foregroundStyle(Palette.muted)
-            }
-        }
-    }
-    private func circleButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.system(size: 14)).frame(width: 41, height: 41)
-            .background(.white.opacity(0.05)).clipShape(Circle()) }
-            .buttonStyle(.plain).help(help).accessibilityLabel(help)
-    }
-    private var composer: some View {
-        HStack(spacing: 12) {
-            TextField("也可以在这里写一句话…", text: $model.draft, axis: .vertical)
-                .textFieldStyle(.plain).font(.system(size: 12)).lineLimit(1...3)
-                .onSubmit { model.sendDraft() }
-            Button { model.sendDraft() } label: {
-                Image(systemName: "arrow.up").font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(model.draft.isEmpty ? Palette.muted : Palette.background)
-                    .frame(width: 28, height: 28).background(model.draft.isEmpty ? Color.white.opacity(0.04) : Palette.accent).clipShape(Circle())
-            }.buttonStyle(.plain).disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isMuted || model.phase == .connecting)
-                .accessibilityLabel("发送")
-        }.padding(.horizontal, 16).padding(.vertical, 12)
-            .background(Palette.panel).clipShape(RoundedRectangle(cornerRadius: 17))
-            .overlay(RoundedRectangle(cornerRadius: 17).stroke(.white.opacity(0.05), lineWidth: 1))
+        Button {
+            model.callInProgress ? model.disableVoice() : model.startCall()
+        } label: {
+            Label(model.callInProgress ? "挂电话" : "打电话", systemImage: model.callInProgress ? "phone.down.fill" : "phone.fill")
+                .font(.system(size: 14, weight: .medium))
+                .frame(minWidth: 116).padding(.horizontal, 24).padding(.vertical, 16)
+                .foregroundStyle(model.callInProgress ? Color.white : Palette.background)
+                .background(model.callInProgress ? Color(red: 0.66, green: 0.27, blue: 0.24) : Palette.accent)
+                .clipShape(Capsule())
+        }.buttonStyle(.plain)
+            .help(model.callInProgress ? "结束通话并停止收音" : "直接接通\(model.companionName)")
     }
 
     private var memoryPage: some View {
@@ -288,9 +252,9 @@ struct CompanionRootView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 Text("舒服的相处方式").font(.system(size: 28, design: .serif))
-                settingCard("怎么称呼她", caption: "开启唤起后，在一句话开头叫这个名字。") {
+                settingCard("怎么称呼她", caption: "通话时，她会使用这个名字。") {
                     TextField("名字", text: $model.companionName).textFieldStyle(.roundedBorder).frame(maxWidth: 220)
-                    Text("建议 2–8 个字。叫名字唤起仍需要在本机验证准确性。")
+                    Text("建议 2–8 个字，选一个你叫起来亲切的名字。")
                         .font(.system(size: 10)).foregroundStyle(Palette.muted)
                 }
                 settingCard("实时语音", caption: "像通话一样交流，声音直接传入模型。") {
@@ -320,7 +284,7 @@ struct CompanionRootView: View {
                     CloudVoiceSettingsView(output: model.cloudVoice, controller: model)
                     Text("本机听写必须可用才会开启语音，不会自动退回云端识别。外放插话效果需实机确认，建议先用耳机体验。")
                         .font(.system(size: 12)).lineSpacing(5).foregroundStyle(.secondary)
-                    Text("“结束这次对话”回到等待呼唤；电源按钮彻底关闭输入。Mac 休眠时不承诺可唤起。")
+                    Text("点“打电话”直接开始；点“挂电话”停止收音和播放，不再等待呼唤。")
                         .font(.system(size: 11)).foregroundStyle(Palette.muted)
                 }
                 }
