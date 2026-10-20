@@ -29,7 +29,23 @@ import CompanionCore
     private var dialogID = ""
     private var contextRevision: Int?
     private var contextDispatched = false
-    init(packetSink: ((Data) async throws -> Void)? = nil) { self.packetSink = packetSink; super.init() }
+    private let ping: ConnectionHeartbeat.Probe?
+    private let heartbeat: ConnectionHeartbeat
+    init(packetSink: ((Data) async throws -> Void)? = nil, ping: ConnectionHeartbeat.Probe? = nil, heartbeat: ConnectionHeartbeat? = nil) {
+        self.packetSink = packetSink; self.ping = ping; self.heartbeat = heartbeat ?? ConnectionHeartbeat()
+        super.init()
+    }
+    private func monitorConnection() {
+        let probe: ConnectionHeartbeat.Probe
+        if let ping { probe = ping }
+        else if let socket { probe = { reply in socket.sendPing { error in reply(error == nil) } } }
+        else { return }
+        let token = epoch
+        heartbeat.start(probe: probe) { [weak self] in
+            guard let self, self.epoch == token, self.ready else { return }
+            self.fail("通话连接没有响应，已停止收音。请检查网络后重新打电话。")
+        }
+    }
     func updateMemoryContext(_ configuration: RealtimeConfiguration, revision: Int) {
         guard ready, contextRevision == nil else { event("memory_context.failed", ["revision": revision]); return }
         do {
@@ -151,6 +167,7 @@ import CompanionCore
         case 150:
             guard !ready else { return }; ready = true; deadline?.cancel(); deadline = nil
             dialogID = body["dialog_id"] as? String ?? ""
+            monitorConnection()
             invoke("window.doubao.activate();"); onReady?()
         case 251:
             if contextDispatched, let revision = contextRevision { contextDispatched = false; contextRevision = nil; event("memory_context.updated", ["revision": revision]) }
@@ -282,6 +299,7 @@ import CompanionCore
     }
     func stop() {
         epoch += 1; ready = false; authorized = false
+        heartbeat.stop()
         starting?.cancel(); receiving?.cancel(); writing?.cancel(); deadline?.cancel()
         starting = nil; receiving = nil; writing = nil; deadline = nil
         socket?.cancel(with: .normalClosure, reason: nil); session?.invalidateAndCancel(); socket = nil; session = nil
