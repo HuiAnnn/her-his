@@ -3,6 +3,23 @@ import CompanionCore
 @testable import CompanionApp
 
 @MainActor final class ContinuityControllerTests: XCTestCase {
+    func testCallDiagnosticsRecordActualContextWithoutCopyingConversation() throws {
+        let (controller, _, driver, _, directory) = RealtimeControllerTests().fixture()
+        defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        controller.setTestRecordingEnabled(true)
+        controller.startCall(); driver.onReady?(); speak(driver, "合成诊断故事里的紫色风车")
+        controller.disableVoice(); controller.startCall(); driver.onReady?()
+        controller.disableVoice(); controller.callHistory.setContinuityEnabled(false)
+        controller.startCall(); driver.onReady?()
+        let entries = try JSONDecoder().decode([TestJournal.Entry].self, from: Data(contentsOf: controller.testJournalURL))
+        let contexts = try entries.filter { $0.kind == "call_context" }.map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.text.utf8)) as? [String: Any])
+        }
+        XCTAssertEqual(contexts.count, 3)
+        XCTAssertEqual(contexts.compactMap { $0["historyIncluded"] as? Bool }, [false, true, false])
+        XCTAssertEqual(contexts.compactMap { $0["continuityEnabled"] as? Bool }, [true, true, false])
+        XCTAssertFalse(entries.filter { $0.kind == "call_context" }.contains { $0.text.contains("紫色风车") })
+    }
     func testRedialCarriesPreviousCallWithoutSolicitingSpeech() throws {
         let (controller, _, driver, _, directory) = RealtimeControllerTests().fixture()
         defer { controller.shutdown(); try? FileManager.default.removeItem(at: directory) }

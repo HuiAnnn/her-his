@@ -6,6 +6,7 @@ import Speech
 struct CompanionProbe {
     @MainActor static func main() async {
         let client = OllamaClient(model: "qwen3:4b")
+        if CommandLine.arguments.contains("--doubao-recall") { await DoubaoRecallProbe.run(); return }
         if CommandLine.arguments.contains("--continuity") { await continuityProbe(client); return }
         if CommandLine.arguments.contains("--quality") { await qualityProbe(client); return }
         if CommandLine.arguments.contains("--memory-only") { await memoryProbe(client); return }

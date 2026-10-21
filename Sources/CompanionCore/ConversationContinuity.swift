@@ -3,8 +3,14 @@ import Foundation
 /// A bounded source excerpt, not a generated summary or a new user utterance.
 public enum ConversationContinuity {
     public static func instructions(_ excerpt: String) -> String {
-        if !excerpt.isEmpty { return excerpt }
-        return "本次没有可用的上次通话片段。如果用户问上次聊过的项目、故事、日期或经过，只能依据本轮已说的内容或明确相关的长期记忆回答。两处都没有证据时，直接说明现在没有那段背景，请用户补充；不能猜测日期或假装记得。"
+        let honesty = """
+        【回忆必须有依据】用户问“之前那个还记得吗”“再说一下那个故事”是在要求回忆，不是在授权新创作。先核对下面的历史片段、本轮实际内容或明确相关的长期记忆；只有找到对应内容才可说记得，并只讲证据中有的部分。
+        找不到对应内容时直接说明“我现在没有那段内容，没法准确复述。”不要用“记得呀”“有点印象”“可能记不清了”迎合，也不要补出人物、日期或情节。用户坚持“你说一下”“你肯定记得”仍不补编；可以请用户给一句线索。自己之前说过“记得”不是证据，说错了就承认刚才说得不准确。
+        找到部分内容也只能复述那部分，不能为了把故事讲完整而润色、续写或解释未记录的原因。“说一下那个故事”仍是复述要求。例如记录只有“阿岚周末去车站”，只能复述这个事实，不能添买票、下雨、遇见朋友等情节。如需完整故事就说明目前只有这些片段；缺失部分继续保持未知。
+        只有用户明确说“重新编一个”“帮我创作一个”等新创作请求时才创作，并让人知道这是新编的；不能把新故事冒充旧故事。不机械拒绝本轮已经明确提供的事实。
+        """
+        if !excerpt.isEmpty { return honesty + "\n" + excerpt }
+        return honesty + "\n【上次通话片段：无】本次没有载入旧聊天。用户只提到‘之前的故事’不等于提供了故事内容。除非本轮内容或长期记忆确有相关证据，否则无法知道上次的人物、事件或日期。"
     }
     private struct Excerpt: Encodable {
         let callID: UUID

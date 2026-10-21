@@ -188,6 +188,15 @@ final class CompanionController: ObservableObject {
         do { try testJournal.append(kind: kind, text: text, enabled: testRecordingEnabled); testRecordingError = nil }
         catch { testRecordingError = "本机测试记录写入失败，原记录已保留。" }
     }
+    private func recordCallContext(provider: String) {
+        let metadata: [String: Any] = ["provider": provider, "continuityEnabled": callHistory.continuityEnabled,
+            "historyIncluded": !continuityContext.isEmpty, "historyCharacters": continuityContext.count,
+            "historySavingEnabled": callHistory.enabled, "memoryEnabled": memoryEnabled,
+            "memoryCount": memoryEnabled ? MemoryContext.select(memories).count : 0]
+        if let data = try? JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]) {
+            recordTest("call_context", String(decoding: data, as: UTF8.self))
+        }
+    }
     private func appendLine(role: String, text: String, record: Bool = true) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         lines.append(.init(role: role, text: text))
@@ -356,6 +365,7 @@ final class CompanionController: ObservableObject {
     }
     private func openConversation() {
         continuityContext = memoryEnabled ? callHistory.continuity(companion: companionName) : ""
+        recordCallContext(provider: "本机")
         callHistory.begin(companion: companionName, provider: "本机")
         cancelOutput(); gate.open(); listeningOnly = false; history.removeAll(); lines.removeAll()
         phase = .listening; partial = ""; lastPartial = ""; completingWakeUtterance = false
@@ -587,6 +597,7 @@ final class CompanionController: ObservableObject {
         gate.open(); history.removeAll(); lines.removeAll(); partial = ""; lastPartial = ""
         wakeEnabled = true; speechAvailable = true; textOnly = false; errorText = nil
         continuityContext = memoryEnabled ? callHistory.continuity(companion: companionName) : ""
+        recordCallContext(provider: realtime.provider.title)
         callHistory.begin(companion: companionName, provider: realtime.provider.title)
         do {
             try realtime.start(configuration: .init(name: companionName, model: realtime.model, voice: realtime.voice,
