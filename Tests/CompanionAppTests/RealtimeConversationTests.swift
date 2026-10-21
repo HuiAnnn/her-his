@@ -95,8 +95,9 @@ import CompanionCore
     var onEvent: (([String: Any]) -> Void)?
     var onFailure: ((String) -> Void)?
     var sent: [[String: Any]] = []
+    var configurations: [RealtimeConfiguration] = []
     var starts = 0, stops = 0, interruptions = 0
-    func start(key: String, configuration: RealtimeConfiguration) { starts += 1 }
+    func start(key: String, configuration: RealtimeConfiguration) { starts += 1; configurations.append(configuration) }
     func send(_ event: [String: Any]) { sent.append(event) }
     func interrupt() { interruptions += 1 }
     func stop() { stops += 1 }

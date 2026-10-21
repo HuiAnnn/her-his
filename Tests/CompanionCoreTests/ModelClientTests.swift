@@ -76,10 +76,12 @@ final class ModelClientTests: XCTestCase {
             XCTAssertNotNil(body["format"] as? [String: Any])
             let messages = try XCTUnwrap(body["messages"] as? [[String: String]])
             XCTAssertEqual(messages.first?["role"], "system")
+            XCTAssertTrue(messages.first?["content"]?.contains("合成的过去通话背景") == true)
+            XCTAssertEqual(messages.last?["content"], "你好\n/no_think")
             XCTAssertTrue(messages.contains { ($0["content"] ?? "").contains("/no_think") })
             return (200, response)
         }
-        let result = try await client().respond(messages: [.init(role: "user", content: "你好")], memories: [], name: "小禾")
+        let result = try await client().respond(messages: [.init(role: "user", content: "你好")], memories: [], name: "小禾", continuity: "合成的过去通话背景")
         XCTAssertEqual(paths, ["/api/show", "/api/chat"])
         XCTAssertEqual(result.reply, "我在，慢慢说。")
         XCTAssertTrue(result.memories.isEmpty)

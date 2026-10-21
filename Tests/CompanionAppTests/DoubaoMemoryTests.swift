@@ -81,7 +81,7 @@ import CompanionCore
 }
 @MainActor private final class DoubaoMemoryModel: ModelServing {
     func health() async throws -> [String] { ["qwen3:4b"] }
-    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String) async throws -> ModelReply { XCTFail("Must not use text model for speech replies"); return .init(reply: "") }
+    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String) async throws -> ModelReply { XCTFail("Must not use text model for speech replies"); return .init(reply: "") }
     func memoryCandidates(source: String, existing: [CompanionMemory]) async throws -> [MemoryCandidate] {
         try? await Task.sleep(nanoseconds: 50_000_000)
         return [.init(key: "rain", content: "喜欢雨声", kind: .preference, evidence: "我喜欢雨声")]
@@ -90,7 +90,7 @@ import CompanionCore
 
 @MainActor private final class SequencedMemoryModel: ModelServing {
     func health() async throws -> [String] { ["qwen3:4b"] }
-    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String) async throws -> ModelReply { throw ModelClientError.invalidResponse }
+    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String) async throws -> ModelReply { throw ModelClientError.invalidResponse }
     func memoryCandidates(source: String, existing: [CompanionMemory]) async throws -> [MemoryCandidate] {
         try await Task.sleep(nanoseconds: 50_000_000)
         return [.init(key: source.contains("雨") ? "rain" : "walking", content: source, kind: .preference, evidence: source)]

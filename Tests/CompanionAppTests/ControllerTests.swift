@@ -233,12 +233,13 @@ import CompanionCore
 }
 @MainActor final class FakeModel: ModelServing {
     var requests: [[ChatMessage]] = []
+    var continuities: [String] = []
     var shouldFail = false
     var suspend = false
     var pending: CheckedContinuation<ModelReply, Error>?
     func health() async throws -> [String] { ["qwen3:4b"] }
-    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String) async throws -> ModelReply {
-        requests.append(messages)
+    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String) async throws -> ModelReply {
+        requests.append(messages); continuities.append(continuity)
         if shouldFail { throw ModelClientError.invalidResponse }
         if suspend { return try await withCheckedThrowingContinuation { pending = $0 } }
         return ModelReply(reply: "我在听。")

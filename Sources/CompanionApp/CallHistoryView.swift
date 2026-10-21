@@ -73,7 +73,7 @@ struct CallHistoryView: View {
                     }
                 }
             }
-            Text("删除历史不会删除“慢慢记得”中的长期记忆或本机测试记录，请分别管理。")
+            Text("删除历史后，此前保留的通话只供回看；若正在使用续聊片段会结束通话。长期记忆与测试记录需分别管理。")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
         }.padding(.horizontal, 34).padding(.bottom, 28)
         .confirmationDialog("删除这次通话记录？", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -81,9 +81,9 @@ struct CallHistoryView: View {
                 if let deleting { model.delete(deleting); if selectedID == deleting { selectedID = nil } }
                 deleting = nil
             }
-        } message: { Text("删除后无法恢复。如果通话还在继续，本次剩余文字也不再保存；长期记忆与测试记录不受影响。") }
+        } message: { Text("删除后无法恢复。若正在使用旧通话续聊，会结束通话以撤回上下文；若删除的是当前通话，本次剩余文字也不再保存。长期记忆与测试记录不受影响。") }
         .confirmationDialog("清空所有通话历史？", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("清空全部通话历史", role: .destructive) { model.clear(); selectedID = nil }
-        } message: { Text("删除后无法恢复，本次通话也不再追加历史。长期记忆与测试记录需分别清除。") }
+        } message: { Text("删除后无法恢复。若正在使用旧通话续聊，会结束通话；本次也不再追加历史。长期记忆与测试记录需分别清除。") }
     }
 }

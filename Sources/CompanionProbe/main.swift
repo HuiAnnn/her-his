@@ -6,6 +6,7 @@ import Speech
 struct CompanionProbe {
     @MainActor static func main() async {
         let client = OllamaClient(model: "qwen3:4b")
+        if CommandLine.arguments.contains("--continuity") { await continuityProbe(client); return }
         if CommandLine.arguments.contains("--quality") { await qualityProbe(client); return }
         if CommandLine.arguments.contains("--memory-only") { await memoryProbe(client); return }
         do {
@@ -53,6 +54,37 @@ struct CompanionProbe {
             exit(1)
         }
     }
+    /// Synthetic local-model evaluation: never reads application history or cloud keys.
+    @MainActor private static func continuityProbe(_ client: OllamaClient) async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ContinuityProbe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            let store = try CallHistoryStore(fileURL: directory.appendingPathComponent("history.json"), ownerID: "synthetic-user")
+            let memories = try MemoryStore(fileURL: directory.appendingPathComponent("memory.json"), ownerID: "synthetic-user")
+            try store.begin(companion: "小禾", provider: "synthetic", enabled: true)
+            try store.append(role: "user", text: "我们编个故事：小舟在做纸船项目，原定周三展示，他有点紧张。")
+            try store.append(role: "assistant", text: "小舟在意这次展示。")
+            try store.append(role: "user", text: "更正一下，故事里的展示已经改到周五，周三作废。")
+            try store.finish()
+            let excerpt = ConversationContinuity.prompt(calls: store.calls, companion: "小禾")
+            let scenarios = [
+                ("resume", "接着上次的故事，小舟正在做什么项目？", excerpt, "应提到纸船项目，不虚构后续经过"),
+                ("correction", "上次故事里的展示最后定在哪天？", excerpt, "应回答周五，不把周三当最终日期"),
+                ("no_context", "上次故事里的展示最后定在哪天？", "", "应承认缺少背景，不编造日期")
+            ]
+            for (scenario, query, context, expected) in scenarios {
+                let start = Date()
+                let reply = try await client.respond(messages: [.init(role: "user", content: query)], memories: [], name: "小禾", continuity: context)
+                try memories.apply(candidates: reply.memories, source: query, expectedRevision: memories.revision, enabled: true)
+                guard memories.memories.isEmpty else { throw ProbeFailure("旧故事被错误写成当前用户事实") }
+                let record: [String: Any] = ["storedMemories": memories.memories.count, "scenario": scenario, "query": query, "expected": expected, "reply": reply.reply,
+                                           "seconds": Date().timeIntervalSince(start), "memoryCandidates": reply.memories.count]
+                print(String(decoding: try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]), as: UTF8.self))
+            }
+            print("Synthetic local responses collected; judge against expected text. Not a cloud audio or listening-quality pass.")
+        } catch { fputs("Continuity probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    }
+
     @MainActor private static func qualityProbe(_ client: OllamaClient) async {
         do {
             for source in ["你知道怎么做饭吗？", "我喜欢什么饮料？", "我喜欢晚上散步，有什么路线推荐？", "今天好累啊"] {

@@ -267,9 +267,14 @@ struct CompanionRootView: View {
                 }
                 settingCard("通话历史", caption: "按通话保存双方文字，在“聊过的话”回看。") {
                     Toggle("保存通话历史", isOn: Binding(get: { model.callHistory.enabled }, set: model.callHistory.setEnabled))
-                    Text("只保存在本机，不保存录音；隐私回合、凭据或原话未就绪的回答会省略。关闭后立即停止新增；重新开启从下次通话开始。已有历史保留到你删除，容量上限32MB，达到后提示停止新增。")
+                    Text("历史文件保存在本机，不保存录音；隐私回合、凭据或原话未就绪的回答会省略。关闭后立即停止新增；重新开启从下次通话开始。已有历史保留到你删除，容量上限32MB，达到后提示停止新增。")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text("历史不会自动全部发给模型，也不等于长期记忆。测试记录是独立开关。")
+                    Toggle("接着上次聊", isOn: Binding(get: { model.callHistory.continuityEnabled }, set: model.callHistory.setContinuityEnabled))
+                    Text("下次拨打时，携带最近7天内上次通话的有限片段；云端模式会将片段发送给所选服务。从升级后的新通话开始，最多6个回合。历史保存或自动记忆关闭时暂停续聊。")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("关闭续聊或删除历史，若正在使用旧片段，会结束通话以撤回上下文。编辑或删除长期记忆、删除历史后，此前保留的通话仅供回看，不再用于续聊。")
+                        .font(.system(size: 11)).foregroundStyle(Palette.muted)
+                    Text("续聊片段不等于长期记忆；历史、长期记忆和测试记录分别管理。")
                         .font(.system(size: 11)).foregroundStyle(Palette.muted)
                     if let error = model.callHistory.error { Text(error).font(.system(size: 12)).foregroundStyle(.orange) }
                 }
@@ -327,7 +332,7 @@ struct CompanionRootView: View {
                 Label("可选本机对话，或直接传送音频的云端实时对话。", systemImage: "desktopcomputer")
                 Label("本机模式也可单独选用 ElevenLabs 声音。", systemImage: "waveform")
                 Label("自动记住有用的小事，随时查看、纠正或删除。", systemImage: "leaf")
-                Label("默认在本机保存通话文字，可在设置关闭，在历史页删除。", systemImage: "clock")
+                Label("默认保存通话文字并携带最近通话片段续聊，云端模式会发送片段；设置可关闭。", systemImage: "clock")
             }.font(.system(size: 12)).foregroundStyle(.secondary)
             Text("本机对话引擎会自动准备。开启语音时，macOS 会询问麦克风和语音识别权限。")
                 .font(.system(size: 11)).foregroundStyle(Palette.muted)

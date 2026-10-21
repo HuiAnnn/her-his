@@ -65,5 +65,5 @@ import CompanionCore
         if failures > 0 { failures -= 1; throw failure }
         return ["qwen3:4b"]
     }
-    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String) async throws -> ModelReply { ModelReply(reply: "我在。") }
+    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String) async throws -> ModelReply { ModelReply(reply: "我在。") }
 }

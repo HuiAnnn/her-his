@@ -64,6 +64,7 @@ final class CompanionController: ObservableObject {
     private var store: MemoryStore?
     private var gate = TurnGate()
     private var history: [ChatMessage] = []
+    private var continuityContext = ""
     private var realtimeMemory: Task<Void, Never>?
     private var realtimeMemoryQueue: [String] = []
     private var memoryJobEpoch = 0
@@ -150,6 +151,11 @@ final class CompanionController: ObservableObject {
             guard let self else { return }; self.disableVoice(); self.phase = .unavailable; self.errorText = message
         }
         realtimeChanges = self.realtime.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        callHistory.onRecallInvalidated = { [weak self] in
+            guard let self, !self.continuityContext.isEmpty else { return }
+            self.disableVoice()
+            self.errorText = "续聊内容已撤回，通话已结束。重新打电话后使用当前设置与保留的记录。"
+        }
         historyChanges = callHistory.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         sleepObserver = workspaceNotifications.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.prepareForSleep() }
@@ -304,6 +310,7 @@ final class CompanionController: ObservableObject {
     }
 
     func disableVoice() {
+        continuityContext = ""
         callHistory.finish()
         phoneCall = false
         realtime.stop()
@@ -314,6 +321,7 @@ final class CompanionController: ObservableObject {
         phase = .off
     }
     func mute() {
+        continuityContext = ""
         callHistory.finish()
         realtime.stop()
         voiceEpoch += 1
@@ -331,6 +339,7 @@ final class CompanionController: ObservableObject {
     }
     func endConversation() {
         if phoneCall { disableVoice(); return }
+        continuityContext = ""
         callHistory.finish()
         let wasRealtime = realtime.isActive
         realtime.stop()
@@ -346,6 +355,7 @@ final class CompanionController: ObservableObject {
         } else { phase = wasMuted ? .muted : .off }
     }
     private func openConversation() {
+        continuityContext = memoryEnabled ? callHistory.continuity(companion: companionName) : ""
         callHistory.begin(companion: companionName, provider: "本机")
         cancelOutput(); gate.open(); listeningOnly = false; history.removeAll(); lines.removeAll()
         phase = .listening; partial = ""; lastPartial = ""; completingWakeUtterance = false
@@ -483,13 +493,14 @@ final class CompanionController: ObservableObject {
         var requestHistory = Array(history.suffix(23))
         if listeningOnly { requestHistory.insert(ChatMessage(role: "user", content: "这次对话我只想让你听，不要给建议。"), at: 0) }
         if privateTurn { history.removeAll() }
+        let continuity = continuityContext
         let memorySnapshot = memories
         let client = clientFactory(modelName)
         let name = companionName
         phase = .thinking
         generation = Task { [weak self] in
             do {
-                let response = try await client.respond(messages: requestHistory, memories: memorySnapshot, name: name)
+                let response = try await client.respond(messages: requestHistory, memories: memorySnapshot, name: name, continuity: continuity)
                 guard let self, !Task.isCancelled, self.gate.accepts(token) else { return }
                 if let issue = response.memoryIssue { self.errorText = issue }
                 var answer = response.reply
@@ -498,6 +509,7 @@ final class CompanionController: ObservableObject {
                     do {
                         if forget {
                             let matched = store.memories.filter { response.forgetKeys.contains($0.key) }
+                            self.continuityContext = ""; self.callHistory.excludePastFromRecall()
                             for item in matched { try store.delete(id: item.id) }
                             answer = matched.isEmpty
                                 ? "这句话不会保存为记忆。暂时没找到要删除的已有记忆，你也可以在“慢慢记得”里直接删除。"
@@ -535,12 +547,14 @@ final class CompanionController: ObservableObject {
     }
 
     func setMemoryEnabled(_ enabled: Bool) {
+        if !enabled { callHistory.excludePastFromRecall() }; continuityContext = ""
         if realtime.isActive { disableVoice() }
         cancelOutput(); store?.invalidatePending(); resetInputContext(); history.removeAll(); lines.removeAll()
         memoryEnabled = enabled; defaults.set(enabled, forKey: "memoryEnabled")
         if gate.isOpen { phase = .listening }
     }
     func deleteMemory(_ id: UUID) {
+        callHistory.excludePastFromRecall(); continuityContext = ""
         if realtime.isActive { disableVoice() }
         cancelOutput(); resetInputContext(); history.removeAll(); lines.removeAll()
         do { guard let store else { throw MemoryStoreError.corruptFile }; try store.delete(id: id); memories = store.memories }
@@ -548,6 +562,7 @@ final class CompanionController: ObservableObject {
         if gate.isOpen { phase = .listening }
     }
     func editMemory(_ id: UUID, content: String) {
+        callHistory.excludePastFromRecall(); continuityContext = ""
         if realtime.isActive { disableVoice() }
         cancelOutput(); resetInputContext(); history.removeAll(); lines.removeAll()
         do { guard let store else { throw MemoryStoreError.corruptFile }; try store.edit(id: id, content: content); memories = store.memories }
@@ -555,6 +570,7 @@ final class CompanionController: ObservableObject {
         if gate.isOpen { phase = .listening }
     }
     func clearMemories() {
+        callHistory.excludePastFromRecall(); continuityContext = ""
         if realtime.isActive { disableVoice() }
         cancelOutput(); resetInputContext(); history.removeAll(); lines.removeAll()
         do { guard let store else { throw MemoryStoreError.corruptFile }; try store.clear(); memories = store.memories }
@@ -570,10 +586,11 @@ final class CompanionController: ObservableObject {
         voiceEpoch += 1; cancelOutput(); speech.stop(); realtime.stop()
         gate.open(); history.removeAll(); lines.removeAll(); partial = ""; lastPartial = ""
         wakeEnabled = true; speechAvailable = true; textOnly = false; errorText = nil
+        continuityContext = memoryEnabled ? callHistory.continuity(companion: companionName) : ""
         callHistory.begin(companion: companionName, provider: realtime.provider.title)
         do {
             try realtime.start(configuration: .init(name: companionName, model: realtime.model, voice: realtime.voice,
-                                                    memories: memories, memoryEnabled: memoryEnabled), initialText: initialText)
+                                                    memories: memories, memoryEnabled: memoryEnabled, continuity: continuityContext), initialText: initialText)
         } catch {
             disableVoice(); errorText = error.localizedDescription; selectedPage = "settings"
         }
@@ -664,6 +681,7 @@ final class CompanionController: ObservableObject {
                 guard MemoryPolicy.hasForgetIntent(in: source) else { return "未删除：没有检测到用户的忘记请求。" }
                 let matched = store.memories.filter { update.forgetKeys.prefix(8).contains($0.key) }
                 guard !matched.isEmpty else { return "未删除：没有找到对应记忆。" }
+                continuityContext = ""; callHistory.excludePastFromRecall()
                 for item in matched { try store.delete(id: item.id) }
                 memories = store.memories
                 // The old session instructions contain the deleted context: close it immediately.

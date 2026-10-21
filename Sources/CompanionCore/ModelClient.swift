@@ -163,11 +163,11 @@ public final class OllamaClient: @unchecked Sendable {
         return localModels
     }
 
-    public func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String) async throws -> ModelReply {
+    public func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String = "") async throws -> ModelReply {
         // Leave one second for cancellation/return after optional work; the outer cap stays at 15 seconds.
         let memoryDeadline = ContinuousClock().now.advanced(by: .seconds(14))
         return try await withThrowingTaskGroup(of: ModelReply.self) { group in
-            group.addTask { try await self.generate(messages: messages, memories: memories, name: name, memoryDeadline: memoryDeadline) }
+            group.addTask { try await self.generate(messages: messages, memories: memories, name: name, continuity: continuity, memoryDeadline: memoryDeadline) }
             group.addTask { try await Task.sleep(nanoseconds: 15_000_000_000); throw URLError(.timedOut) }
             defer { group.cancelAll() }
             guard let response = try await group.next() else { throw ModelClientError.invalidResponse }
@@ -175,7 +175,7 @@ public final class OllamaClient: @unchecked Sendable {
         }
     }
 
-    private func generate(messages: [ChatMessage], memories: [CompanionMemory], name: String, memoryDeadline: ContinuousClock.Instant) async throws -> ModelReply {
+    private func generate(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String, memoryDeadline: ContinuousClock.Instant) async throws -> ModelReply {
         guard !messages.isEmpty, messages.last?.role == "user",
               messages.allSatisfy({ ["user", "assistant"].contains($0.role) && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.content.count <= 8_000 }) else { throw ModelClientError.invalidInput }
         try await verifyLocalModel(named: model)
@@ -183,7 +183,7 @@ public final class OllamaClient: @unchecked Sendable {
         conversation[conversation.count - 1].content += "\n/no_think"
         let body: [String: Any] = [
             "model": model, "stream": false, "think": false, "format": PromptPolicy.responseSchema,
-            "messages": [["role": "system", "content": PromptPolicy.system(name: name, memories: memories)]] + conversation.map { ["role": $0.role, "content": $0.content] },
+            "messages": [["role": "system", "content": PromptPolicy.system(name: name, memories: memories) + "\n" + ConversationContinuity.instructions(continuity)]] + conversation.map { ["role": $0.role, "content": $0.content] },
             "options": ["temperature": 0.6, "num_predict": 600, "num_ctx": 8192]]
         let data = try await request(path: "api/chat", body: JSONSerialization.data(withJSONObject: body))
         struct Envelope: Decodable { let message: ChatMessage; let done: Bool; let done_reason: String? }

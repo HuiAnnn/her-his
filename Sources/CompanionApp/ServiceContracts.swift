@@ -21,7 +21,7 @@ import CompanionCore
 @MainActor protocol ModelServing {
     func memoryCandidates(source: String, existing: [CompanionMemory]) async throws -> [MemoryCandidate]
     func health() async throws -> [String]
-    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String) async throws -> ModelReply
+    func respond(messages: [ChatMessage], memories: [CompanionMemory], name: String, continuity: String) async throws -> ModelReply
 }
 extension SpeechService: SpeechDriving {}
 extension OllamaClient: ModelServing {}
