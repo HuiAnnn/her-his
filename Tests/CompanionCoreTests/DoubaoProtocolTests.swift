@@ -2,6 +2,12 @@ import XCTest
 @testable import CompanionCore
 
 final class DoubaoProtocolTests: XCTestCase {
+    func testPatientSilenceWindow() throws {
+        let session = try DoubaoPacket.session(.init(name: "Companion", model: "1.2.1.1", voice: "zh_female_vv_jupiter_bigtts"))
+        let extra = (session["asr"] as? [String: Any])?["extra"] as? [String: Any]
+        XCTAssertEqual(extra?["end_smooth_window_ms"] as? Int, 3000)
+        XCTAssertEqual(extra?["enable_custom_vad"] as? Bool, true)
+    }
     func testOfficialStartConnectionFixture() throws {
         XCTAssertEqual(try DoubaoPacket.encode(event: 1, payload: Data("{}".utf8)), Data([17,20,16,0,0,0,0,1,0,0,0,2,123,125]))
     }

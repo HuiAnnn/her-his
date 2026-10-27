@@ -69,6 +69,8 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     private var responseHasAudio = false
     @Published private(set) var memoryContextStatus = ""
     @Published private(set) var responseWaitMessage = ""
+    @Published private(set) var turnHoldMessage = ""
+    private var holdingFloor = false
     let memorySync: LiveMemorySync
     private var deferredText: (id: String, text: String)?
     private var memoryAllowed = false
@@ -151,7 +153,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     }
     func stop() {
         epoch += 1
-        cancelResponseWait(); responseHasAudio = false
+        cancelResponseWait(); responseHasAudio = false; holdingFloor = false; turnHoldMessage = ""
         deferredText = nil; memorySync.stop()
         for value in [openAIDriver, doubaoDriver] {
             value.onReady = nil; value.onEvent = nil; value.onFailure = nil; value.stop()
@@ -195,12 +197,13 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     private func flushDeferredText() {
         guard isActive, !memorySync.isWaiting, !memorySync.hasFailed, let pending = deferredText else { return }
         deferredText = nil
-        beginResponseWait()
         driver.send(["type": "conversation.item.create", "item": ["id": pending.id, "type": "message", "role": "user", "content": [["type": "input_text", "text": pending.text]]]])
         driver.send(["type": "response.create"])
+        // Doubao may synchronously release the floor while sending a text command.
+        beginResponseWait()
     }
     private func beginResponseWait() {
-        guard isActive, state != .connecting, responseDeadline == nil, !responseHasAudio else { return }
+        guard isActive, !holdingFloor, state != .connecting, responseDeadline == nil, !responseHasAudio else { return }
         let token = responseWaitEpoch, warningDelay = responseWarningDelay, timeout = responseTimeout
         responseWarning = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: warningDelay) } catch { return }
@@ -222,6 +225,11 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
     private func receive(_ event: [String: Any]) {
         guard let type = event["type"] as? String else { return }
         switch type {
+        case "turn.floor":
+            guard provider == .doubao, let holding = event["holding"] as? Bool else { return }
+            holdingFloor = holding
+            turnHoldMessage = holding ? "你慢慢想，我在听。说“你说吧”后我再回应。" : ""
+            if holding { suppressCurrent(); state = .listening }
         case "memory_context.query":
             if let text = event["text"] as? String { memorySync.retrieve(text) }
         case "memory_context.updated":
@@ -235,7 +243,7 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
             suppressCurrent(); manuallyInterrupted = false; currentResponse = nil
             latestItem = nil; sourceText = nil; state = .listening
         case "input_audio_buffer.speech_stopped":
-            guard !manuallyInterrupted, !responseHasAudio else { return }
+            guard !holdingFloor, !manuallyInterrupted, !responseHasAudio else { return }
             state = .thinking; beginResponseWait()
         case "input_audio_buffer.committed":
             latestItem = event["item_id"] as? String; sourceText = nil
@@ -251,11 +259,11 @@ enum RealtimeState { case idle, connecting, listening, thinking, speaking }
         case "response.created":
             guard let response = event["response"] as? [String: Any], let id = response["id"] as? String else { return }
             currentResponse = id
-            if manuallyInterrupted { suppressed.insert(id); driver.interrupt(); return }
+            if holdingFloor || manuallyInterrupted { suppressed.insert(id); driver.interrupt(); return }
             if let latestItem { responseSources[id] = latestItem }
             state = .thinking
         case "output_audio_buffer.started":
-            guard !manuallyInterrupted, let id = event["response_id"] as? String,
+            guard !holdingFloor, !manuallyInterrupted, let id = event["response_id"] as? String,
                   id == currentResponse, !suppressed.contains(id) else { return }
             responseHasAudio = true; cancelResponseWait(); state = .speaking
         case "response.output_audio_transcript.done":

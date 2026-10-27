@@ -20,6 +20,7 @@ import CompanionCore
     private var awaitingTextAck = false
     private var queuedText: (text: String, generation: Int)?
     private var question = "", reply = "", audioReply = "", transcript = ""
+    private var floor = PatientTurnPolicy()
     private var suppressed = false, rejected: Set<String> = []
     private var ttsCaption = "", chatCaption: String?
     private var chatFinished = false, playbackDone = false, captionPublished = false
@@ -151,13 +152,29 @@ import CompanionCore
     }
     private func event(_ type: String, _ fields: [String: Any] = [:]) { var value = fields; value["type"] = type; onEvent?(value) }
     private func beginReply(_ body: [String: Any]) -> Bool {
-        guard !suppressed, let id = body["reply_id"] as? String, !id.isEmpty, !rejected.contains(id),
-              let q = body["question_id"] as? String, q == question else { return false }
+        guard let id = body["reply_id"] as? String, !id.isEmpty else { return false }
+        guard !floor.isHolding, !suppressed, !rejected.contains(id),
+              let q = body["question_id"] as? String, q == question else {
+            rejectUnheardReply(id)
+            return false
+        }
         if reply != id {
             reply = id; resetCaption()
             event("response.created", ["response": ["id": id]])
         }
         return !suppressed
+    }
+    private func rejectUnheardReply(_ id: String) {
+        // A rejected ID is retained across user turns so release cannot revive it.
+        guard rejected.insert(id).inserted else { return }
+        enqueue(event: 513, body: ["item_id": id, "audio_end_ms": 0])
+    }
+    private func updateFloor(_ text: String) {
+        let previous = floor.isHolding
+        floor.consume(text)
+        guard previous != floor.isHolding else { return }
+        if floor.isHolding { interrupt() }
+        event("turn.floor", ["holding": floor.isHolding])
     }
     func receive(_ packet: DoubaoPacket) throws {
         if let id = packet.sessionID, id != sessionID { return }
@@ -182,7 +199,9 @@ import CompanionCore
                 event("memory_context.query", ["text": String(text.prefix(4000))])
             }
             if let results = body["results"] as? [[String: Any]], let result = results.last,
-               result["is_interim"] as? Bool == false, let text = result["text"] as? String { transcript = String(text.prefix(4000)) }
+               result["is_interim"] as? Bool == false, let text = result["text"] as? String {
+                transcript = String(text.prefix(4000)); updateFloor(transcript)
+            }
         case 459:
             if !transcript.isEmpty { event("conversation.item.input_audio_transcription.completed", ["item_id": question, "transcript": transcript]); transcript = "" }
             event("input_audio_buffer.speech_stopped")
@@ -197,14 +216,7 @@ import CompanionCore
             }
         case 350:
             audioReply = body["reply_id"] as? String ?? ""
-            guard beginReply(body) else {
-                // A manually stopped response may not have emitted any PCM yet.
-                if !audioReply.isEmpty, !rejected.contains(audioReply) {
-                    rejected.insert(audioReply)
-                    enqueue(event: 513, body: ["item_id": audioReply, "audio_end_ms": 0])
-                }
-                return
-            }
+            guard beginReply(body) else { return }
             invoke("window.doubao.begin(id);", ["id": reply])
             if let text = body["text"] as? String { ttsCaption = String((ttsCaption + text).prefix(8000)) }
         case 550:
@@ -214,12 +226,12 @@ import CompanionCore
             guard beginReply(body) else { return }
             chatFinished = true; publishCaptionIfReady()
         case 352:
-            guard ready, !suppressed, !reply.isEmpty, audioReply == reply, !rejected.contains(reply) else { return }
+            guard ready, !floor.isHolding, !suppressed, !reply.isEmpty, audioReply == reply, !rejected.contains(reply) else { return }
             guard !packet.payload.isEmpty, packet.payload.count % 2 == 0 else { throw DoubaoError.protocolError }
             event("output_audio_buffer.started", ["response_id": reply])
             invoke("window.doubao.play(data,id);", ["data": packet.payload.base64EncodedString(), "id": reply])
         case 359:
-            guard !suppressed, body["reply_id"] as? String == reply, !reply.isEmpty else { return }
+            guard !floor.isHolding, !suppressed, body["reply_id"] as? String == reply, !reply.isEmpty else { return }
             invoke("window.doubao.end(id);", ["id": reply])
             event("response.done", ["response": ["id": reply, "status": "completed", "output": []]])
         default: break
@@ -232,6 +244,7 @@ import CompanionCore
         suppressed = false; reply = ""; audioReply = ""; question = ""
         inputGeneration += 1
         let bounded = String(text.prefix(4000))
+        updateFloor(bounded)
         // Only one unacknowledged query is on the wire: 553 has no client correlation ID.
         if awaitingTextAck { queuedText = (bounded, inputGeneration) }
         else { submitText(bounded, generation: inputGeneration) }
@@ -280,7 +293,7 @@ import CompanionCore
         }
     }
     func playbackFinished(_ id: String) {
-        guard !suppressed, !id.isEmpty, id == reply, !rejected.contains(id), !playbackDone else { return }
+        guard !floor.isHolding, !suppressed, !id.isEmpty, id == reply, !rejected.contains(id), !playbackDone else { return }
         playbackDone = true; publishCaptionIfReady()
         event("output_audio_buffer.stopped", ["response_id": id])
     }
@@ -289,7 +302,7 @@ import CompanionCore
         chatFinished = false; playbackDone = false; captionPublished = false
     }
     private func publishCaptionIfReady() {
-        guard playbackDone, !captionPublished, !suppressed,
+        guard !floor.isHolding, playbackDone, !captionPublished, !suppressed,
               chatCaption == nil || chatFinished else { return }
         // ChatResponse is the authoritative reply stream; never append it to TTS text.
         let text = (chatCaption ?? ttsCaption).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -298,7 +311,7 @@ import CompanionCore
         event("response.output_audio_transcript.done", ["response_id": reply, "transcript": text])
     }
     func stop() {
-        epoch += 1; ready = false; authorized = false
+        epoch += 1; ready = false; authorized = false; floor = PatientTurnPolicy()
         heartbeat.stop()
         starting?.cancel(); receiving?.cancel(); writing?.cancel(); deadline?.cancel()
         starting = nil; receiving = nil; writing = nil; deadline = nil

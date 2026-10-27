@@ -95,10 +95,11 @@ import CompanionCore
     var onEvent: (([String: Any]) -> Void)?
     var onFailure: ((String) -> Void)?
     var sent: [[String: Any]] = []
+    var onSend: (([String: Any]) -> Void)?
     var configurations: [RealtimeConfiguration] = []
     var starts = 0, stops = 0, interruptions = 0
     func start(key: String, configuration: RealtimeConfiguration) { starts += 1; configurations.append(configuration) }
-    func send(_ event: [String: Any]) { sent.append(event) }
+    func send(_ event: [String: Any]) { sent.append(event); onSend?(event) }
     func interrupt() { interruptions += 1 }
     func stop() { stops += 1 }
     func event(_ type: String, _ data: [String: Any] = [:]) { var event = data; event["type"] = type; onEvent?(event) }

@@ -19,6 +19,10 @@ enum DoubaoRecallProbe {
                 throw Failure("凭证无法无交互读取；未请求密码或发起云端请求。")
             }
             let credential = try JSONDecoder().decode(DoubaoCredentials.self, from: data)
+            if CommandLine.arguments.contains("--patient-timing") {
+                try await DoubaoTimingProbe.run(credential)
+                return
+            }
             let repetitions = CommandLine.arguments.contains("--repeat-three") ? 3 : 1
             for repetition in 1...repetitions {
                 try await episode(credential, repetition: repetition)
@@ -78,7 +82,7 @@ enum DoubaoRecallProbe {
                         try file.read(into: buffer)
                         guard let samples = buffer.int16ChannelData?[0] else { throw Failure("合成音频格式不正确。") }
                         var pcm = Data(bytes: samples, count: Int(buffer.frameLength) * 2)
-                        pcm.append(Data(repeating: 0, count: 16000 * 2 * 2))
+                        pcm.append(Data(repeating: 0, count: 16000 * 2 * 4))
                         for start in stride(from: 0, to: pcm.count, by: 640) {
                             try await socket.send(.data(DoubaoPacket.encode(event: 200, sessionID: id,
                                 payload: pcm.subdata(in: start..<min(start + 640, pcm.count)), audio: true)))
